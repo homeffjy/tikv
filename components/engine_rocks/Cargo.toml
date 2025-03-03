@@ -10,6 +10,7 @@ trace-lifetime = []
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
+aws = ["rocksdb/aws"]
 failpoints = ["fail/failpoints"]
 testexport = []
 
@@ -58,7 +59,7 @@ txn_types = { workspace = true }
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
-features = ["encryption"]
+features = ["encryption", "aws"]
 
 [dev-dependencies]
 proptest = "1.0.0"

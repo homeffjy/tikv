@@ -278,6 +278,8 @@ impl SyncMutable for RocksEngine {
 
 #[cfg(test)]
 mod tests {
+    use std::{env, thread::sleep, time::Duration};
+
     use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT};
     use kvproto::metapb::Region;
     use proptest::prelude::*;
@@ -488,8 +490,18 @@ mod tests {
             .prefix("test_rocks_titan_basic_operations_titan")
             .tempdir()
             .unwrap();
+        println!("path_titan: {}", path_titan.path().to_str().unwrap());
         let mut tdb_opts = TitanDBOptions::new();
+        tdb_opts.set_dirname(path_titan.path().join("titan").to_str().unwrap());
         tdb_opts.set_min_blob_size(min_blob_size);
+        tdb_opts.initialize_aws_sdk().unwrap();
+        tdb_opts
+            .configure_bucket(
+                path_titan.path().to_str().unwrap(),
+                "ap-northeast-2",
+                "crazy",
+            )
+            .unwrap();
         if enable_dict_compress {
             tdb_opts.set_compression_options(
                 -14,                                 // window_bits
@@ -500,6 +512,10 @@ mod tests {
             );
         }
         let mut opts = DBOptions::new();
+        opts.create_info_log(path_titan.path().to_str().unwrap())
+            .unwrap();
+        let db_logger = opts.get_info_log();
+        opts.set_env(tdb_opts.create_cloud_env(db_logger).unwrap());
         opts.set_titandb_options(&tdb_opts);
         opts.create_if_missing(true);
 
