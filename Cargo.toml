@@ -20,7 +20,7 @@ mimalloc = ["tikv_alloc/mimalloc"]
 snmalloc = ["tikv_alloc/snmalloc"]
 portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
-cloud_aws = ["engine_rocks/aws"]
+cloud_aws = ["engine_rocks/cloud_aws"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 failpoints = [
   "fail/failpoints",

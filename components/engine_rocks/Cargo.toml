@@ -10,7 +10,7 @@ trace-lifetime = []
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
-aws = ["rocksdb/aws"]
+cloud_aws = ["rocksdb/aws"]
 failpoints = ["fail/failpoints"]
 testexport = []
 

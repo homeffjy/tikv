@@ -1202,6 +1202,10 @@ pub struct TitanDbConfig {
     pub max_background_gc: i32,
     // The value of this field will be truncated to seconds.
     pub purge_obsolete_files_period: ReadableDuration,
+    // Blob cloud config
+    pub cloud_enabled: Option<bool>,
+    pub cloud_region: Option<String>,
+    pub cloud_bucket: Option<String>,
 }
 
 impl Default for TitanDbConfig {
@@ -1212,6 +1216,9 @@ impl Default for TitanDbConfig {
             disable_gc: false,
             max_background_gc: 1,
             purge_obsolete_files_period: ReadableDuration::secs(10),
+            cloud_enabled: None,
+            cloud_region: None,
+            cloud_bucket: None,
         }
     }
 }
@@ -1223,11 +1230,17 @@ impl TitanDbConfig {
         opts.set_disable_background_gc(self.disable_gc);
         opts.set_max_background_gc(self.max_background_gc);
         opts.set_purge_obsolete_files_period(self.purge_obsolete_files_period.as_secs() as usize);
-        if let Err(e) = opts.initialize_aws_sdk() {
-            error!("Failed to initialize AWS SDK: {}", e);
-        }
-        if let Err(e) = opts.configure_bucket("crazyDB", "crazy", "ap-northeast-2") {
-            error!("Failed to configure bucket: {}", e);
+        if let Some(true) = self.cloud_enabled {
+            if let Err(e) = opts.initialize_aws_sdk() {
+                error!("Failed to initialize AWS SDK: {}", e);
+            }
+            if let Err(e) = opts.configure_bucket(
+                self.dirname.as_str(),
+                self.cloud_region.as_ref().unwrap(),
+                self.cloud_bucket.as_ref().unwrap(),
+            ) {
+                error!("Failed to configure bucket: {}", e);
+            }
         }
         opts
     }
@@ -1547,13 +1560,16 @@ impl DbConfig {
         if for_engine == EngineType::RaftKv {
             opts.set_info_log(RocksdbLogger);
         }
+        let mut env = shared.env.clone();
         if let Some(true) = self.titan.enabled {
             let mut titan_opts = self.titan.build_opts();
-            let db_logger = opts.get_info_log();
-            titan_opts.create_cloud_env(db_logger).unwrap();
+            if let Some(true) = self.titan.cloud_enabled {
+                let db_logger = opts.get_info_log();
+                env = titan_opts.create_cloud_env(db_logger).unwrap();
+            }
             opts.set_titandb_options(&titan_opts);
         }
-        opts.set_env(shared.env.clone());
+        opts.set_env(env);
         opts.set_statistics(&shared.statistics);
         if let Some(r) = &shared.rate_limiter {
             opts.set_rate_limiter(r);
