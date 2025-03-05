@@ -1230,17 +1230,21 @@ impl TitanDbConfig {
         opts.set_disable_background_gc(self.disable_gc);
         opts.set_max_background_gc(self.max_background_gc);
         opts.set_purge_obsolete_files_period(self.purge_obsolete_files_period.as_secs() as usize);
+        info!("Titan aws cloud enabled: {}", self.cloud_enabled.unwrap_or(false));
         if let Some(true) = self.cloud_enabled {
             if let Err(e) = opts.initialize_aws_sdk() {
                 error!("Failed to initialize AWS SDK: {}", e);
             }
+            let mut dirname_for_bucket = self.dirname.as_str().to_string();
+            dirname_for_bucket.push_str("/cloud");
             if let Err(e) = opts.configure_bucket(
-                self.dirname.as_str(),
+                dirname_for_bucket.as_str(),
                 self.cloud_region.as_ref().unwrap(),
                 self.cloud_bucket.as_ref().unwrap(),
             ) {
                 error!("Failed to configure bucket: {}", e);
             }
+            info!("TitanDB configured for AWS S3");
         }
         opts
     }

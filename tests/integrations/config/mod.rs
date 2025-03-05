@@ -300,6 +300,9 @@ fn test_serde_custom_tikv_config() {
         disable_gc: false,
         max_background_gc: 9,
         purge_obsolete_files_period: ReadableDuration::secs(1),
+        cloud_enabled: Some(true),
+        cloud_region: Some("ap-northeast-2".to_owned()),
+        cloud_bucket: Some("awslinux".to_owned()),
     };
 
     value.rocksdb = {

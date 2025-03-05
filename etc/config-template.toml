@@ -704,6 +704,10 @@
 ## default: 1
 # max-background-gc = 1
 
+# cloud-enabled = true
+# cloud-region = "ap-northeast-2"
+# cloud-bucket = "awslinux"
+
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
 ## Compression method (if any) is used to compress a block.
