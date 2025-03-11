@@ -303,6 +303,9 @@ fn test_serde_custom_tikv_config() {
         cloud_enabled: Some(true),
         cloud_region: Some("ap-northeast-2".to_owned()),
         cloud_bucket: Some("awslinux".to_owned()),
+        aws_access_key_id: Some("AKIA6666666666666666".to_owned()),
+        aws_secret_access_key: Some("6666666666666666666666666666666666666666".to_owned()),
+        aws_session_token: Some("6666666666666666666666666666666666666666".to_owned()),
     };
 
     value.rocksdb = {

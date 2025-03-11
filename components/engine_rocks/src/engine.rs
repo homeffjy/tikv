@@ -500,6 +500,9 @@ mod tests {
                 path_titan.path().to_str().unwrap(),
                 "ap-northeast-2",
                 "crazy",
+                None,
+                None,
+                None,
             )
             .unwrap();
         if enable_dict_compress {

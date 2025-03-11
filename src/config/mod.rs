@@ -1206,6 +1206,10 @@ pub struct TitanDbConfig {
     pub cloud_enabled: Option<bool>,
     pub cloud_region: Option<String>,
     pub cloud_bucket: Option<String>,
+
+    pub aws_access_key_id: Option<String>,
+    pub aws_secret_access_key: Option<String>,
+    pub aws_session_token: Option<String>,
 }
 
 impl Default for TitanDbConfig {
@@ -1219,6 +1223,9 @@ impl Default for TitanDbConfig {
             cloud_enabled: None,
             cloud_region: None,
             cloud_bucket: None,
+            aws_access_key_id: None,
+            aws_secret_access_key: None,
+            aws_session_token: None,
         }
     }
 }
@@ -1241,6 +1248,9 @@ impl TitanDbConfig {
                 dirname_for_bucket.as_str(),
                 self.cloud_region.as_ref().unwrap(),
                 self.cloud_bucket.as_ref().unwrap(),
+                self.aws_access_key_id.as_ref().map(|s| s.as_str()),
+                self.aws_secret_access_key.as_ref().map(|s| s.as_str()),
+                self.aws_session_token.as_ref().map(|s| s.as_str()),
             ) {
                 error!("Failed to configure bucket: {}", e);
             }

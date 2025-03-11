@@ -296,6 +296,9 @@ purge-obsolete-files-period = "1s"
 cloud-enabled = true
 cloud-region = "ap-northeast-2"
 cloud-bucket = "awslinux"
+aws-access-key-id = "AKIA6666666666666666"
+aws-secret-access-key = "6666666666666666666666666666666666666666"
+aws-session-token = "6666666666666666666666666666666666666666"
 
 [rocksdb.defaultcf]
 block-size = "12KB"
@@ -532,6 +535,9 @@ purge-obsolete-files-period = "1s"
 cloud-enabled = true
 cloud-region = "ap-northeast-2"
 cloud-bucket = "awslinux"
+aws-access-key-id = "AKIA6666666666666666"
+aws-secret-access-key = "6666666666666666666666666666666666666666"
+aws-session-token = "6666666666666666666666666666666666666666"
 
 [raftdb.defaultcf]
 block-size = "12KB"

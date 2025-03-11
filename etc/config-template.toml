@@ -708,6 +708,10 @@
 # cloud-region = "ap-northeast-2"
 # cloud-bucket = "awslinux"
 
+# aws-access-key-id = 
+# aws-secret-access-key = 
+# aws-session-token = 
+
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
 ## Compression method (if any) is used to compress a block.
