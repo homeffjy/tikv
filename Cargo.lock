@@ -3818,7 +3818,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/homeffjy/rust-rocksdb?branch=dev-fjy/port-rocksdb-cloud#e346fc5b4e71b5143abaaaf943d61791a0c1a65e"
+source = "git+https://github.com/homeffjy/rust-rocksdb?branch=dev-fjy/port-rocksdb-cloud#e83abc43cc6e6288c8d090212841cc43db5a5a41"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3837,7 +3837,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/homeffjy/rust-rocksdb?branch=dev-fjy/port-rocksdb-cloud#e346fc5b4e71b5143abaaaf943d61791a0c1a65e"
+source = "git+https://github.com/homeffjy/rust-rocksdb?branch=dev-fjy/port-rocksdb-cloud#e83abc43cc6e6288c8d090212841cc43db5a5a41"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5796,7 +5796,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/homeffjy/rust-rocksdb?branch=dev-fjy/port-rocksdb-cloud#e346fc5b4e71b5143abaaaf943d61791a0c1a65e"
+source = "git+https://github.com/homeffjy/rust-rocksdb?branch=dev-fjy/port-rocksdb-cloud#e83abc43cc6e6288c8d090212841cc43db5a5a41"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
