@@ -1237,7 +1237,6 @@ impl TitanDbConfig {
         opts.set_disable_background_gc(self.disable_gc);
         opts.set_max_background_gc(self.max_background_gc);
         opts.set_purge_obsolete_files_period(self.purge_obsolete_files_period.as_secs() as usize);
-        info!("Titan aws cloud enabled: {}", self.cloud_enabled.unwrap_or(false));
         if let Some(true) = self.cloud_enabled {
             if let Err(e) = opts.initialize_aws_sdk() {
                 error!("Failed to initialize AWS SDK: {}", e);
@@ -1579,6 +1578,7 @@ impl DbConfig {
             let titan_opts = self.titan.build_opts();
             if let Some(true) = self.titan.cloud_enabled {
                 env = Arc::new(Env::new_titan_cloud_env(shared.env.clone(), &titan_opts).unwrap());
+                info!("Titan cloud env created");
             }
             opts.set_titandb_options(&titan_opts);
         }
