@@ -1576,10 +1576,9 @@ impl DbConfig {
         }
         let mut env = shared.env.clone();
         if let Some(true) = self.titan.enabled {
-            let mut titan_opts = self.titan.build_opts();
+            let titan_opts = self.titan.build_opts();
             if let Some(true) = self.titan.cloud_enabled {
-                let db_logger = opts.get_info_log();
-                env = titan_opts.create_cloud_env(db_logger).unwrap();
+                env = Arc::new(Env::new_titan_cloud_env(shared.env.clone(), &titan_opts).unwrap());
             }
             opts.set_titandb_options(&titan_opts);
         }

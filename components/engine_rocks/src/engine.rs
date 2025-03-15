@@ -515,10 +515,6 @@ mod tests {
             );
         }
         let mut opts = DBOptions::new();
-        opts.create_info_log(path_titan.path().to_str().unwrap())
-            .unwrap();
-        let db_logger = opts.get_info_log();
-        opts.set_env(tdb_opts.create_cloud_env(db_logger).unwrap());
         opts.set_titandb_options(&tdb_opts);
         opts.create_if_missing(true);
 
