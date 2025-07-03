@@ -6,7 +6,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{
     CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
     RocksDbOptions, RocksEngine, RocksEventListener, RocksPersistenceListener, RocksStatistics,
-    TabletLogger,
+    SstStatsListener, TabletLogger,
     raw::{Cache, Env},
     util::RangeCompactionFilterFactory,
 };
@@ -158,6 +158,7 @@ impl KvEngineFactory {
             if let Some(filter) = self.create_raftstore_compaction_listener() {
                 db_opts.add_event_listener(filter);
             }
+            db_opts.add_event_listener(SstStatsListener::new("kv"));
         }
         db_opts
     }

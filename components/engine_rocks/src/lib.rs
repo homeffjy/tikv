@@ -94,6 +94,9 @@ pub use event_listener::*;
 pub mod flow_listener;
 pub use flow_listener::*;
 
+pub mod sst_stats_listener;
+pub use sst_stats_listener::*;
+
 pub mod config;
 pub use config::*;
 

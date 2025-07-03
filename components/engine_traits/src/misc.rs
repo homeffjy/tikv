@@ -86,8 +86,9 @@ impl RangeStats {
 
 #[derive(Default)]
 pub struct SstFileStats {
-    pub file_name: String,
     pub range_stats: RangeStats,
+    pub file_name: Option<String>,
+    pub min_commit_ts: Option<u64>,
 }
 
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {

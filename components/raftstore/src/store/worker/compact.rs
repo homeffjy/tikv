@@ -468,7 +468,7 @@ where
                     }
                 }
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
-            }
+            },
             Task::CheckAndCompactFiles {
                 ranges,
                 compact_threshold,
@@ -480,7 +480,7 @@ where
                     fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
                 }
                 Err(e) => warn!("check files need compact failed"; "err" => %e),
-            }
+            },
         }
     }
 }
@@ -582,7 +582,7 @@ fn collect_files_need_compact(
         {
             for sst_file_stat in sst_file_stats {
                 if need_compact_sst(&sst_file_stat, &compact_threshold) {
-                    files_need_compact.push(sst_file_stat.file_name);
+                    files_need_compact.push(sst_file_stat.file_name.unwrap());
                 }
             }
         }

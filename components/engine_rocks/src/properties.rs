@@ -594,13 +594,14 @@ pub fn get_range_sst_stats(
                 Err(_) => return None,
             };
             Some(SstFileStats {
-                file_name: name.to_string(),
                 range_stats: RangeStats {
                     num_entries: v.num_entries(),
                     num_versions: mvcc.num_versions,
                     num_rows: mvcc.num_rows,
                     num_deletes: mvcc.num_deletes,
                 },
+                file_name: Some(name.to_string()),
+                min_commit_ts: Some(mvcc.min_ts.into_inner()),
             })
         })
         .collect::<Option<Vec<SstFileStats>>>()
