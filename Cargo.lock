@@ -2164,6 +2164,7 @@ dependencies = [
  "engine_traits",
  "fail",
  "file_system",
+ "keyed_priority_queue",
  "keys",
  "kvproto",
  "lazy_static",

@@ -33,6 +33,7 @@ encryption = { workspace = true }
 engine_traits = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
+keyed_priority_queue = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4.0"

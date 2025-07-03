@@ -4,6 +4,7 @@
 //! not been carefully factored into other traits.
 //!
 //! FIXME: Things here need to be moved elsewhere.
+use std::cmp::Ordering;
 
 use crate::{
     KvEngine, WriteBatchExt, WriteOptions, cf_names::CfNamesExt, errors::Result,
@@ -89,6 +90,31 @@ pub struct SstFileStats {
     pub range_stats: RangeStats,
     pub file_name: Option<String>,
     pub min_commit_ts: Option<u64>,
+}
+
+impl PartialEq for SstFileStats {
+    fn eq(&self, other: &Self) -> bool {
+        self.min_commit_ts == other.min_commit_ts
+    }
+}
+
+impl Eq for SstFileStats {}
+
+impl PartialOrd for SstFileStats {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self.min_commit_ts, other.min_commit_ts) {
+            (Some(a), Some(b)) => a.partial_cmp(&b),
+            (Some(_), None) => Some(Ordering::Less),
+            (None, Some(_)) => Some(Ordering::Greater),
+            (None, None) => Some(Ordering::Equal),
+        }
+    }
+}
+
+impl Ord for SstFileStats {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+    }
 }
 
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
