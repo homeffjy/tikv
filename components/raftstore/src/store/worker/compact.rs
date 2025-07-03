@@ -51,6 +51,12 @@ pub enum Task {
         // The minimum RocksDB tombstones/duplicate versions a range that need compacting has
         compact_threshold: CompactThreshold,
     },
+
+    CheckAndCompactFiles {
+        // cf_names: Vec<String>,
+        ranges: Vec<Key>,
+        compact_threshold: CompactThreshold,
+    },
 }
 
 type CompactPredicateFn = Box<dyn Fn() -> bool + Send + Sync>;
@@ -204,6 +210,14 @@ impl Display for Task {
                     "redundant_rows_percent_threshold",
                     &compact_threshold.redundant_rows_percent_threshold,
                 )
+                .finish(),
+            Task::CheckAndCompactFiles {
+                ref ranges,
+                ref compact_threshold,
+            } => f
+                .debug_struct("CheckAndCompactFiles")
+                .field("ranges", ranges)
+                .field("compact_threshold", compact_threshold)
                 .finish(),
         }
     }
@@ -430,33 +444,32 @@ where
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
-            // Task::CheckAndCompact {
-            //     cf_names,
-            //     ranges,
-            //     compact_threshold,
-            // } => match collect_ranges_need_compact(&self.engine, ranges, compact_threshold) {
-            //     Ok(mut ranges) => {
-            //         for (start, end) in ranges.drain(..) {
-            //             for cf in &cf_names {
-            //                 if let Err(e) =
-            //                     self.compact_range_cf(cf, Some(&start), Some(&end), false)
-            //                 {
-            //                     error!(
-            //                         "compact range failed";
-            //                         "range_start" => log_wrappers::Value::key(&start),
-            //                         "range_end" => log_wrappers::Value::key(&end),
-            //                         "cf" => cf,
-            //                         "err" => %e,
-            //                     );
-            //                 }
-            //             }
-            //             fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
-            //         }
-            //     }
-            //     Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
-            // }
             Task::CheckAndCompact {
                 cf_names,
+                ranges,
+                compact_threshold,
+            } => match collect_ranges_need_compact(&self.engine, ranges, compact_threshold) {
+                Ok(mut ranges) => {
+                    for (start, end) in ranges.drain(..) {
+                        for cf in &cf_names {
+                            if let Err(e) =
+                                self.compact_range_cf(cf, Some(&start), Some(&end), false)
+                            {
+                                error!(
+                                    "compact range failed";
+                                    "range_start" => log_wrappers::Value::key(&start),
+                                    "range_end" => log_wrappers::Value::key(&end),
+                                    "cf" => cf,
+                                    "err" => %e,
+                                );
+                            }
+                        }
+                        fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
+                    }
+                }
+                Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
+            }
+            Task::CheckAndCompactFiles {
                 ranges,
                 compact_threshold,
             } => match collect_files_need_compact(&self.engine, ranges, compact_threshold) {
@@ -467,7 +480,7 @@ where
                     fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
                 }
                 Err(e) => warn!("check files need compact failed"; "err" => %e),
-            },
+            }
         }
     }
 }
