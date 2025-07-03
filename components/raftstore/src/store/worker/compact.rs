@@ -8,7 +8,9 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{CF_LOCK, CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats};
+use engine_traits::{
+    CF_LOCK, CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats, SstFileStats,
+};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
@@ -344,6 +346,26 @@ where
         );
         Ok(())
     }
+
+    pub fn compact_files_cf(
+        &mut self,
+        cf_name: &str,
+        files: Vec<String>,
+        output_level: Option<i32>,
+        max_subcompactions: u32,
+        exclude_l0: bool,
+    ) -> Result<(), Error> {
+        fail_point!("on_compact_files_cf");
+        // TODO(fjy): add timer
+        box_try!(self.engine.compact_files_cf(
+            cf_name,
+            files,
+            output_level,
+            max_subcompactions,
+            exclude_l0
+        ));
+        Ok(())
+    }
 }
 
 impl<E> Runnable for Runner<E>
@@ -408,30 +430,43 @@ where
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
+            // Task::CheckAndCompact {
+            //     cf_names,
+            //     ranges,
+            //     compact_threshold,
+            // } => match collect_ranges_need_compact(&self.engine, ranges, compact_threshold) {
+            //     Ok(mut ranges) => {
+            //         for (start, end) in ranges.drain(..) {
+            //             for cf in &cf_names {
+            //                 if let Err(e) =
+            //                     self.compact_range_cf(cf, Some(&start), Some(&end), false)
+            //                 {
+            //                     error!(
+            //                         "compact range failed";
+            //                         "range_start" => log_wrappers::Value::key(&start),
+            //                         "range_end" => log_wrappers::Value::key(&end),
+            //                         "cf" => cf,
+            //                         "err" => %e,
+            //                     );
+            //                 }
+            //             }
+            //             fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
+            //         }
+            //     }
+            //     Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
+            // }
             Task::CheckAndCompact {
                 cf_names,
                 ranges,
                 compact_threshold,
-            } => match collect_ranges_need_compact(&self.engine, ranges, compact_threshold) {
-                Ok(mut ranges) => {
-                    for (start, end) in ranges.drain(..) {
-                        for cf in &cf_names {
-                            if let Err(e) =
-                                self.compact_range_cf(cf, Some(&start), Some(&end), false)
-                            {
-                                error!(
-                                    "compact range failed";
-                                    "range_start" => log_wrappers::Value::key(&start),
-                                    "range_end" => log_wrappers::Value::key(&end),
-                                    "cf" => cf,
-                                    "err" => %e,
-                                );
-                            }
-                        }
-                        fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
+            } => match collect_files_need_compact(&self.engine, ranges, compact_threshold) {
+                Ok(files) => {
+                    if let Err(e) = self.compact_files_cf(CF_WRITE, files.clone(), None, 1, false) {
+                        error!("compact files failed"; "err" => %e);
                     }
+                    fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
                 }
-                Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
+                Err(e) => warn!("check files need compact failed"; "err" => %e),
             },
         }
     }
@@ -452,6 +487,21 @@ pub fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThresho
         || (estimate_num_del >= compact_threshold.tombstones_num_threshold
             && estimate_num_del * 100
                 >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries)
+}
+
+pub fn need_compact_sst(sst_stats: &SstFileStats, compact_threshold: &CompactThreshold) -> bool {
+    let range_stats = &sst_stats.range_stats;
+    if range_stats.num_entries < range_stats.num_versions {
+        return false;
+    }
+
+    let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
+    let redundant_keys = range_stats.redundant_keys();
+    // TODO(fjy): add number threshold for one sst file
+    redundant_keys * 100
+        >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries
+        || estimate_num_del * 100
+            >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries
 }
 
 fn collect_ranges_need_compact(
@@ -502,6 +552,30 @@ fn collect_ranges_need_compact(
     }
 
     Ok(ranges_need_compact)
+}
+
+fn collect_files_need_compact(
+    engine: &impl KvEngine,
+    ranges: Vec<Key>,
+    compact_threshold: CompactThreshold,
+) -> Result<Vec<String>, Error> {
+    let mut files_need_compact = Vec::new();
+
+    for range in ranges.windows(2) {
+        // Get total entries and total versions in this range and checks if it needs to
+        // be compacted.
+        if let Some(sst_file_stats) =
+            box_try!(engine.get_range_sst_stats(CF_WRITE, &range[0], &range[1]))
+        {
+            for sst_file_stat in sst_file_stats {
+                if need_compact_sst(&sst_file_stat, &compact_threshold) {
+                    files_need_compact.push(sst_file_stat.file_name);
+                }
+            }
+        }
+    }
+
+    Ok(files_need_compact)
 }
 
 #[cfg(test)]

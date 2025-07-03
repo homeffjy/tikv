@@ -2,8 +2,8 @@
 
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
-    WriteOptions,
+    Range, RangeStats, Result, SstFileStats, SstWriter, SstWriterBuilder, WriteBatch,
+    WriteBatchExt, WriteOptions,
 };
 use fail::fail_point;
 use rocksdb::{FlushOptions, Range as RocksRange};
@@ -455,6 +455,15 @@ impl MiscExt for RocksEngine {
 
     fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>> {
         Ok(crate::properties::get_range_stats(self, cf, start, end))
+    }
+
+    fn get_range_sst_stats(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<Vec<SstFileStats>>> {
+        Ok(crate::properties::get_range_sst_stats(self, cf, start, end))
     }
 
     fn is_stalled_or_stopped(&self) -> bool {

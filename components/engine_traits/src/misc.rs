@@ -84,6 +84,12 @@ impl RangeStats {
     }
 }
 
+#[derive(Default)]
+pub struct SstFileStats {
+    pub file_name: String,
+    pub range_stats: RangeStats,
+}
+
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
     type StatisticsReporter: StatisticsReporter<Self>;
 
@@ -169,6 +175,13 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
     fn get_num_keys(&self) -> Result<u64>;
 
     fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>>;
+
+    fn get_range_sst_stats(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<Vec<SstFileStats>>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
 

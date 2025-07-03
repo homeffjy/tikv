@@ -8,7 +8,7 @@ use std::{
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{MvccProperties, Range, RangeStats, raw_ttl::ttl_current_ts};
+use engine_traits::{MvccProperties, Range, RangeStats, SstFileStats, raw_ttl::ttl_current_ts};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -568,6 +568,42 @@ pub fn get_range_stats(
         num_rows: props.num_rows,
         num_deletes: props.num_deletes,
     })
+}
+
+pub fn get_range_sst_stats(
+    engine: &crate::RocksEngine,
+    cf: &str,
+    start: &[u8],
+    end: &[u8],
+) -> Option<Vec<SstFileStats>> {
+    let range = Range::new(start, end);
+    let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    if collection.is_empty() {
+        return None;
+    }
+
+    collection
+        .iter()
+        .map(|(name, v)| {
+            let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
+                Ok(v) => v,
+                Err(_) => return None,
+            };
+            Some(SstFileStats {
+                file_name: name.to_string(),
+                range_stats: RangeStats {
+                    num_entries: v.num_entries(),
+                    num_versions: mvcc.num_versions,
+                    num_rows: mvcc.num_rows,
+                    num_deletes: mvcc.num_deletes,
+                },
+            })
+        })
+        .collect::<Option<Vec<SstFileStats>>>()
 }
 
 #[cfg(test)]
