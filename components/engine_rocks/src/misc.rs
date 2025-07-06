@@ -501,6 +501,20 @@ impl MiscExt for RocksEngine {
     fn get_disk_engine(&self) -> &Self::DiskEngine {
         self
     }
+
+    fn get_files_from_sst_stats_queue(
+        &self,
+        gc_safe_point: u64,
+        tombstones_percent_threshold: u64,
+        redundant_rows_percent_threshold: u64,
+    ) -> Result<Option<Vec<String>>> {
+        Ok(crate::properties::get_files_from_sst_stats_queue(
+            self,
+            gc_safe_point,
+            tombstones_percent_threshold,
+            redundant_rows_percent_threshold,
+        ))
+    }
 }
 
 #[cfg(test)]

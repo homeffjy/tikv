@@ -158,7 +158,6 @@ impl KvEngineFactory {
             if let Some(filter) = self.create_raftstore_compaction_listener() {
                 db_opts.add_event_listener(filter);
             }
-            db_opts.add_event_listener(SstStatsListener::new("kv"));
         }
         db_opts
     }
@@ -187,13 +186,29 @@ impl KvEngineFactory {
     pub fn create_shared_db(&self, path: impl AsRef<Path>) -> Result<RocksEngine> {
         let path = path.as_ref();
         let mut db_opts = self.db_opts(EngineType::RaftKv);
+
+        let sst_stats_listener = if !self.inner.lite {
+            Some(SstStatsListener::new("kv"))
+        } else {
+            None
+        };
+
+        if let Some(ref listener) = sst_stats_listener {
+            db_opts.add_event_listener(listener.clone());
+        }
+
         let cf_opts = self.cf_opts(None, EngineType::RaftKv);
         if let Some(listener) = &self.inner.flow_listener {
             db_opts.add_event_listener(listener.clone());
         }
         let target_path = path.join(DEFAULT_ROCKSDB_SUB_DIR);
-        let kv_engine =
+        let mut kv_engine =
             engine_rocks::util::new_engine_opt(target_path.to_str().unwrap(), db_opts, cf_opts);
+
+        if let (Ok(ref mut engine), Some(listener)) = (&mut kv_engine, sst_stats_listener) {
+            engine.set_sst_stats_queue(listener.stats_queue());
+        }
+
         if let Err(e) = &kv_engine {
             error!("failed to create kv engine"; "path" => %path.display(), "err" => ?e);
         }

@@ -15,6 +15,7 @@ encryption = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
+keyed_priority_queue = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }

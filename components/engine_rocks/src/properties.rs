@@ -18,9 +18,9 @@ use tikv_util::{
         Error, Result,
         number::{self, NumberEncoder},
     },
-    info,
+    info, warn,
 };
-use txn_types::{Key, Write, WriteType};
+use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::{
     decode_properties::{DecodeProperties, IndexHandle, IndexHandles},
@@ -586,25 +586,96 @@ pub fn get_range_sst_stats(
         return None;
     }
 
-    collection
-        .iter()
-        .map(|(name, v)| {
-            let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
-                Ok(v) => v,
-                Err(_) => return None,
-            };
-            Some(SstFileStats {
-                range_stats: RangeStats {
-                    num_entries: v.num_entries(),
-                    num_versions: mvcc.num_versions,
-                    num_rows: mvcc.num_rows,
-                    num_deletes: mvcc.num_deletes,
-                },
-                file_name: Some(name.to_string()),
-                min_commit_ts: Some(mvcc.min_ts.into_inner()),
-            })
-        })
-        .collect::<Option<Vec<SstFileStats>>>()
+    let mut result_stats = Vec::with_capacity(collection.len());
+    for (name, v) in collection.iter() {
+        let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
+            Ok(props) => props,
+            Err(_) => return None,
+        };
+        let stats = SstFileStats {
+            range_stats: RangeStats {
+                num_entries: v.num_entries(),
+                num_versions: mvcc.num_versions,
+                num_rows: mvcc.num_rows,
+                num_deletes: mvcc.num_deletes,
+            },
+            file_name: name.to_string(),
+            min_commit_ts: if mvcc.min_ts == TimeStamp::max() {
+                // TimeStamp::max() means no timestamped data found in this SST file.
+                // Use u64::MAX to indicate this file should never be considered for GC
+                // since there's no MVCC data to garbage collect.
+                u64::MAX
+            } else {
+                mvcc.min_ts.into_inner()
+            },
+        };
+        result_stats.push(stats);
+    }
+    Some(result_stats)
+}
+
+pub fn get_files_from_sst_stats_queue(
+    engine: &crate::RocksEngine,
+    gc_safe_point: u64,
+    tombstones_percent_threshold: u64,
+    redundant_rows_percent_threshold: u64,
+) -> Option<Vec<String>> {
+    let stats_queue = match engine.get_sst_stats_queue() {
+        Some(q) => q,
+        None => return None,
+    };
+
+    let mut queue = match stats_queue.lock() {
+        Ok(q) => q,
+        Err(poisoned) => {
+            // If the mutex is poisoned, we can still try to access the data
+            // but we log a warning as this indicates a panic occurred while holding the
+            // lock
+            warn!("SST stats queue mutex is poisoned, attempting to recover");
+            poisoned.into_inner()
+        }
+    };
+
+    let candidates = queue.pop_before_ts(gc_safe_point);
+
+    let mut files_to_compact = Vec::new();
+    for stats in candidates.iter() {
+        if need_compact_sst_internal(
+            stats,
+            tombstones_percent_threshold,
+            redundant_rows_percent_threshold,
+        ) {
+            files_to_compact.push(stats.file_name.clone());
+        }
+    }
+
+    match files_to_compact.len() {
+        0 => None,
+        _ => Some(files_to_compact),
+    }
+}
+
+fn need_compact_sst_internal(
+    sst_stats: &SstFileStats,
+    tombstones_percent_threshold: u64,
+    redundant_rows_percent_threshold: u64,
+) -> bool {
+    let range_stats = &sst_stats.range_stats;
+    if range_stats.num_entries < range_stats.num_versions {
+        return false;
+    }
+
+    let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
+    let redundant_keys = range_stats.redundant_keys();
+
+    // Check if tombstones percentage threshold is exceeded
+    if estimate_num_del * 100 >= tombstones_percent_threshold * range_stats.num_entries
+        && redundant_keys * 100 >= redundant_rows_percent_threshold * range_stats.num_entries
+    {
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]

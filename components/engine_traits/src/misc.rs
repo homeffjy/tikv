@@ -4,7 +4,9 @@
 //! not been carefully factored into other traits.
 //!
 //! FIXME: Things here need to be moved elsewhere.
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
+
+use keyed_priority_queue::KeyedPriorityQueue;
 
 use crate::{
     KvEngine, WriteBatchExt, WriteOptions, cf_names::CfNamesExt, errors::Result,
@@ -62,7 +64,7 @@ pub trait StatisticsReporter<T: ?Sized> {
     fn flush(&mut self);
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct RangeStats {
     // The number of entries in write cf.
     pub num_entries: u64,
@@ -85,16 +87,16 @@ impl RangeStats {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SstFileStats {
     pub range_stats: RangeStats,
-    pub file_name: Option<String>,
-    pub min_commit_ts: Option<u64>,
+    pub file_name: String,
+    pub min_commit_ts: u64,
 }
 
 impl PartialEq for SstFileStats {
     fn eq(&self, other: &Self) -> bool {
-        self.min_commit_ts == other.min_commit_ts
+        self.min_commit_ts == other.min_commit_ts && self.file_name == other.file_name
     }
 }
 
@@ -102,18 +104,186 @@ impl Eq for SstFileStats {}
 
 impl PartialOrd for SstFileStats {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self.min_commit_ts, other.min_commit_ts) {
-            (Some(a), Some(b)) => a.partial_cmp(&b),
-            (Some(_), None) => Some(Ordering::Less),
-            (None, Some(_)) => Some(Ordering::Greater),
-            (None, None) => Some(Ordering::Equal),
+        // First compare by min_commit_ts
+        match self.min_commit_ts.partial_cmp(&other.min_commit_ts) {
+            Some(Ordering::Equal) => {
+                // If min_commit_ts is equal, compare by file_name for deterministic ordering
+                self.file_name.partial_cmp(&other.file_name)
+            }
+            other => other,
         }
     }
 }
 
 impl Ord for SstFileStats {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+        // First compare by min_commit_ts
+        match self.min_commit_ts.cmp(&other.min_commit_ts) {
+            Ordering::Equal => {
+                // If min_commit_ts is equal, compare by file_name for deterministic ordering
+                self.file_name.cmp(&other.file_name)
+            }
+            other => other,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SstStatsQueue {
+    queue: KeyedPriorityQueue<String, Reverse<SstFileStats>>, // key: file_name
+}
+
+impl SstStatsQueue {
+    pub fn debug(&self) -> String {
+        let mut result = String::new();
+        for (file_name, stats) in self.queue.iter() {
+            result.push_str(&format!("{}: {:?}\n", file_name, stats.0.min_commit_ts));
+        }
+        result
+    }
+
+    pub fn new() -> Self {
+        Self {
+            queue: KeyedPriorityQueue::new(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    pub fn add_stats(&mut self, stats: SstFileStats) {
+        self.queue.push(stats.file_name.clone(), Reverse(stats));
+    }
+
+    pub fn remove_stats(&mut self, file_name: &str) -> Option<SstFileStats> {
+        self.queue.remove(file_name).map(|stats| stats.0)
+    }
+
+    pub fn pop_before_ts(&mut self, max_ts: u64) -> Vec<SstFileStats> {
+        let mut result = Vec::new();
+
+        while let Some((_, stats)) = self.queue.peek() {
+            if stats.0.min_commit_ts <= max_ts {
+                if let Some((_, stats)) = self.queue.pop() {
+                    result.push(stats.0);
+                }
+            } else {
+                break;
+            }
+        }
+
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sst_stats_queue() {
+        let mut queue = SstStatsQueue::new();
+        assert!(queue.is_empty());
+
+        let stats1 = SstFileStats {
+            range_stats: RangeStats::default(),
+            file_name: "file1.sst".to_string(),
+            min_commit_ts: 100,
+        };
+
+        let stats2 = SstFileStats {
+            range_stats: RangeStats::default(),
+            file_name: "file2.sst".to_string(),
+            min_commit_ts: 50,
+        };
+
+        // Test with same min_commit_ts but different file names
+        let stats3 = SstFileStats {
+            range_stats: RangeStats::default(),
+            file_name: "file3.sst".to_string(),
+            min_commit_ts: 50,
+        };
+
+        queue.add_stats(stats1);
+        queue.add_stats(stats2);
+        queue.add_stats(stats3);
+        assert_eq!(queue.len(), 3);
+
+        let popped = queue.pop_before_ts(75);
+        assert_eq!(popped.len(), 2);
+        // Should get both files with min_commit_ts = 50
+        assert!(popped.iter().any(|s| s.file_name == "file2.sst" && s.min_commit_ts == 50));
+        assert!(popped.iter().any(|s| s.file_name == "file3.sst" && s.min_commit_ts == 50));
+        assert_eq!(queue.len(), 1);
+
+        let removed = queue.remove_stats("file1.sst");
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().min_commit_ts, 100);
+        assert!(queue.is_empty());
+
+        // Test ordering with same min_commit_ts
+        let stats_a = SstFileStats {
+            range_stats: RangeStats::default(),
+            file_name: "a.sst".to_string(),
+            min_commit_ts: 100,
+        };
+        let stats_b = SstFileStats {
+            range_stats: RangeStats::default(),
+            file_name: "b.sst".to_string(),
+            min_commit_ts: 100,
+        };
+
+        // Files with same min_commit_ts should not be considered equal
+        assert_ne!(stats_a, stats_b);
+        
+        queue.add_stats(stats_a);
+        queue.add_stats(stats_b);
+        assert_eq!(queue.len(), 2);
+    }
+
+    #[test]
+    fn test_sst_stats_queue_timestamp_max_handling() {
+        let mut queue = SstStatsQueue::new();
+        
+        // Test file with no timestamped data (should use u64::MAX for min_commit_ts)
+        let stats_no_timestamp = SstFileStats {
+            range_stats: RangeStats::default(),
+            file_name: "no_timestamp.sst".to_string(),
+            min_commit_ts: u64::MAX, // This would be set when mvcc_props.min_ts == TimeStamp::max()
+        };
+
+        // Test file with actual timestamp data
+        let stats_with_timestamp = SstFileStats {
+            range_stats: RangeStats::default(),
+            file_name: "with_timestamp.sst".to_string(),
+            min_commit_ts: 100,
+        };
+
+        queue.add_stats(stats_no_timestamp);
+        queue.add_stats(stats_with_timestamp);
+        assert_eq!(queue.len(), 2);
+
+        // When gc_safe_point is very high, only files with actual timestamps should be returned
+        let popped = queue.pop_before_ts(u64::MAX - 1);
+        assert_eq!(popped.len(), 1);
+        assert_eq!(popped[0].file_name, "with_timestamp.sst");
+        assert_eq!(popped[0].min_commit_ts, 100);
+        
+        // The file with u64::MAX min_commit_ts should remain in queue
+        assert_eq!(queue.len(), 1);
+        
+        // Only when gc_safe_point is u64::MAX should the remaining file be returned
+        let popped2 = queue.pop_before_ts(u64::MAX);
+        assert_eq!(popped2.len(), 1);
+        assert_eq!(popped2[0].file_name, "no_timestamp.sst");
+        assert_eq!(popped2[0].min_commit_ts, u64::MAX);
+        
+        assert!(queue.is_empty());
     }
 }
 
@@ -211,6 +381,16 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
     ) -> Result<Option<Vec<SstFileStats>>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
+
+    /// Get files from SST stats queue that need compaction.
+    /// Returns file names of SST files where the minimum commit timestamp is less than
+    /// gc_safe_point and that meet the compaction criteria.
+    fn get_files_from_sst_stats_queue(
+        &self,
+        gc_safe_point: u64,
+        tombstones_percent_threshold: u64,
+        redundant_rows_percent_threshold: u64,
+    ) -> Result<Option<Vec<String>>>;
 
     /// Returns size and creation time of active memtable if there's one.
     fn get_active_memtable_stats_cf(

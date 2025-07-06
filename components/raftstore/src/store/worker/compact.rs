@@ -53,9 +53,8 @@ pub enum Task {
     },
 
     CheckAndCompactFiles {
-        // cf_names: Vec<String>,
-        ranges: Vec<Key>,
         compact_threshold: CompactThreshold,
+        gc_safe_point: u64,
     },
 }
 
@@ -141,6 +140,23 @@ impl CompactThreshold {
     }
 }
 
+impl Display for CompactThreshold {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompactThreshold")
+            .field("tombstones_num_threshold", &self.tombstones_num_threshold)
+            .field(
+                "tombstones_percent_threshold",
+                &self.tombstones_percent_threshold,
+            )
+            .field("redundant_rows_threshold", &self.redundant_rows_threshold)
+            .field(
+                "redundant_rows_percent_threshold",
+                &self.redundant_rows_percent_threshold,
+            )
+            .finish()
+    }
+}
+
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
@@ -212,12 +228,12 @@ impl Display for Task {
                 )
                 .finish(),
             Task::CheckAndCompactFiles {
-                ref ranges,
                 ref compact_threshold,
+                ref gc_safe_point,
             } => f
                 .debug_struct("CheckAndCompactFiles")
-                .field("ranges", ranges)
                 .field("compact_threshold", compact_threshold)
+                .field("gc_safe_point", gc_safe_point)
                 .finish(),
         }
     }
@@ -470,12 +486,18 @@ where
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
             Task::CheckAndCompactFiles {
-                ranges,
                 compact_threshold,
-            } => match collect_files_need_compact(&self.engine, ranges, compact_threshold) {
+                gc_safe_point,
+            } => match collect_files_need_compact(&self.engine, compact_threshold, gc_safe_point) {
                 Ok(files) => {
-                    if let Err(e) = self.compact_files_cf(CF_WRITE, files.clone(), None, 1, false) {
-                        error!("compact files failed"; "err" => %e);
+                    if !files.is_empty() {
+                        if let Err(e) =
+                            self.compact_files_cf(CF_WRITE, files.clone(), None, 1, false)
+                        {
+                            error!("compact files failed"; "err" => %e);
+                        }
+                    } else {
+                        debug!("No files to compact, skipping compaction task");
                     }
                     fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
                 }
@@ -500,21 +522,6 @@ pub fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThresho
         || (estimate_num_del >= compact_threshold.tombstones_num_threshold
             && estimate_num_del * 100
                 >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries)
-}
-
-pub fn need_compact_sst(sst_stats: &SstFileStats, compact_threshold: &CompactThreshold) -> bool {
-    let range_stats = &sst_stats.range_stats;
-    if range_stats.num_entries < range_stats.num_versions {
-        return false;
-    }
-
-    let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
-    let redundant_keys = range_stats.redundant_keys();
-    // TODO(fjy): add number threshold for one sst file
-    redundant_keys * 100
-        >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries
-        || estimate_num_del * 100
-            >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries
 }
 
 fn collect_ranges_need_compact(
@@ -569,26 +576,30 @@ fn collect_ranges_need_compact(
 
 fn collect_files_need_compact(
     engine: &impl KvEngine,
-    ranges: Vec<Key>,
     compact_threshold: CompactThreshold,
+    gc_safe_point: u64,
 ) -> Result<Vec<String>, Error> {
-    let mut files_need_compact = Vec::new();
-
-    for range in ranges.windows(2) {
-        // Get total entries and total versions in this range and checks if it needs to
-        // be compacted.
-        if let Some(sst_file_stats) =
-            box_try!(engine.get_range_sst_stats(CF_WRITE, &range[0], &range[1]))
-        {
-            for sst_file_stat in sst_file_stats {
-                if need_compact_sst(&sst_file_stat, &compact_threshold) {
-                    files_need_compact.push(sst_file_stat.file_name.unwrap());
-                }
-            }
+    // Get files that need compacting from the SST stats queue
+    let files = match box_try!(engine.get_files_from_sst_stats_queue(
+        gc_safe_point,
+        compact_threshold.tombstones_percent_threshold,
+        compact_threshold.redundant_rows_percent_threshold,
+    )) {
+        Some(files) => files,
+        None => {
+            debug!("No files found for compaction from SST stats queue");
+            return Ok(Vec::new());
         }
-    }
+    };
 
-    Ok(files_need_compact)
+    assert!(!files.is_empty());
+
+    info!("Found files that need compacting";
+          "file_count" => files.len(),
+          "gc_safe_point" => ?gc_safe_point,
+          "files" => ?files);
+
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -995,5 +1006,33 @@ mod tests {
             &range_stats,
             &CompactThreshold::new(100, 100, 100, 30)
         ));
+    }
+
+    #[test]
+    fn test_collect_files_need_compact_no_files() {
+        let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
+        let engine = open_db(tmp_dir.path().to_str().unwrap());
+
+        // Test with no SST files at all - should return Ok(empty vec), not an error
+        let result = collect_files_need_compact(
+            &engine,
+            CompactThreshold::new(10, 30, 100, 100),
+            100, // gc_safe_point
+        );
+
+        match result {
+            Ok(files) => {
+                assert!(
+                    files.is_empty(),
+                    "Expected empty file list when no files need compacting"
+                );
+            }
+            Err(e) => {
+                panic!(
+                    "collect_files_need_compact should not return error for no files: {}",
+                    e
+                );
+            }
+        }
     }
 }

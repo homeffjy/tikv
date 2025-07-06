@@ -1,67 +1,16 @@
 use std::{
-    cmp::Reverse,
     collections::HashSet,
     sync::{Arc, Mutex},
 };
 
-use engine_traits::{RangeStats, SstFileStats};
-use keyed_priority_queue::KeyedPriorityQueue;
+use engine_traits::{RangeStats, SstFileStats, SstStatsQueue};
 use rocksdb::{CompactionJobInfo, EventListener, FlushJobInfo};
 use tikv_util::{info, warn};
 use txn_types::TimeStamp;
 
 use crate::mvcc_properties::RocksMvccProperties;
 
-struct SstStatsQueue {
-    queue: KeyedPriorityQueue<String, Reverse<SstFileStats>>, // key: file_name
-}
-
-impl SstStatsQueue {
-    pub fn new() -> Self {
-        Self {
-            queue: KeyedPriorityQueue::new(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.queue.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
-    }
-
-    pub fn add_stats(&mut self, stats: SstFileStats) {
-        if let Some(file_name) = &stats.file_name {
-            self.queue.push(file_name.clone(), Reverse(stats));
-        }
-    }
-
-    pub fn remove_stats(&mut self, file_name: &str) -> Option<SstFileStats> {
-        self.queue.remove(file_name).map(|stats| stats.0)
-    }
-
-    pub fn pop_before_ts(&mut self, max_ts: u64) -> Vec<SstFileStats> {
-        let mut result = Vec::new();
-
-        while let Some((_, stats)) = self.queue.peek() {
-            if let Some(min_ts) = stats.0.min_commit_ts {
-                if min_ts <= max_ts {
-                    if let Some((_, stats)) = self.queue.pop() {
-                        result.push(stats.0);
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-
-        result
-    }
-}
-
+#[derive(Clone)]
 pub struct SstStatsListener {
     db_name: String,
     stats_queue: Arc<Mutex<SstStatsQueue>>,
@@ -73,6 +22,10 @@ impl SstStatsListener {
             db_name: db_name.to_owned(),
             stats_queue: Arc::new(Mutex::new(SstStatsQueue::new())),
         }
+    }
+
+    pub fn stats_queue(&self) -> Arc<Mutex<SstStatsQueue>> {
+        self.stats_queue.clone()
     }
 
     fn extract_sst_stats(
@@ -100,11 +53,14 @@ impl SstStatsListener {
                 num_rows: mvcc_props.num_rows,
                 num_deletes: mvcc_props.num_deletes,
             },
-            file_name: None,
+            file_name: file_path.to_string(),
             min_commit_ts: if mvcc_props.min_ts == TimeStamp::max() {
-                None
+                // TimeStamp::max() means no timestamped data found in this SST file.
+                // Use u64::MAX to indicate this file should never be considered for GC
+                // since there's no MVCC data to garbage collect.
+                u64::MAX
             } else {
-                Some(mvcc_props.min_ts.into_inner())
+                mvcc_props.min_ts.into_inner()
             },
         })
     }
@@ -122,12 +78,20 @@ impl EventListener for SstStatsListener {
                 "SST file created by flush";
                 "db" => &self.db_name,
                 "cf" => info.cf_name(),
-                "file" => stats.file_name.as_ref().unwrap(),
+                "file" => &stats.file_name,
                 "num_entries" => stats.range_stats.num_entries,
                 "num_versions" => stats.range_stats.num_versions,
                 "min_commit_ts" => ?stats.min_commit_ts,
             );
-            self.stats_queue.lock().unwrap().add_stats(stats);
+            match self.stats_queue.lock() {
+                Ok(mut queue) => {
+                    queue.add_stats(stats);
+                }
+                Err(poisoned) => {
+                    warn!("SST stats queue mutex is poisoned during flush, attempting to recover");
+                    poisoned.into_inner().add_stats(stats);
+                }
+            }
         }
     }
 
@@ -157,9 +121,17 @@ impl EventListener for SstStatsListener {
                         "SST file deleted by compaction";
                         "db" => &self.db_name,
                         "cf" => info.cf_name(),
-                        "file" => stats.file_name.as_ref().unwrap(),
+                        "file" => &stats.file_name,
                     );
-                    self.stats_queue.lock().unwrap().remove_stats(file_path);
+                    match self.stats_queue.lock() {
+                        Ok(mut queue) => {
+                            queue.remove_stats(file_path);
+                        }
+                        Err(poisoned) => {
+                            warn!("SST stats queue mutex is poisoned during compaction remove, attempting to recover");
+                            poisoned.into_inner().remove_stats(file_path);
+                        }
+                    }
                 }
                 return;
             }
@@ -169,47 +141,18 @@ impl EventListener for SstStatsListener {
                     "SST file created by compaction";
                     "db" => &self.db_name,
                     "cf" => info.cf_name(),
-                    "file" => stats.file_name.as_ref().unwrap(),
+                    "file" => &stats.file_name,
                 );
-                self.stats_queue.lock().unwrap().add_stats(stats);
+                match self.stats_queue.lock() {
+                    Ok(mut queue) => {
+                        queue.add_stats(stats);
+                    }
+                    Err(poisoned) => {
+                        warn!("SST stats queue mutex is poisoned during compaction add, attempting to recover");
+                        poisoned.into_inner().add_stats(stats);
+                    }
+                }
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sst_stats_queue() {
-        let mut queue = SstStatsQueue::new();
-        assert!(queue.is_empty());
-
-        let stats1 = SstFileStats {
-            range_stats: RangeStats::default(),
-            file_name: Some("file1.sst".to_string()),
-            min_commit_ts: Some(100),
-        };
-
-        let stats2 = SstFileStats {
-            range_stats: RangeStats::default(),
-            file_name: Some("file2.sst".to_string()),
-            min_commit_ts: Some(50),
-        };
-
-        queue.add_stats(stats1);
-        queue.add_stats(stats2);
-        assert_eq!(queue.len(), 2);
-
-        let popped = queue.pop_before_ts(75);
-        assert_eq!(popped.len(), 1);
-        assert_eq!(popped[0].min_commit_ts, Some(50));
-        assert_eq!(queue.len(), 1);
-
-        let removed = queue.remove_stats("file1.sst");
-        assert!(removed.is_some());
-        assert_eq!(removed.unwrap().min_commit_ts, Some(100));
-        assert!(queue.is_empty());
     }
 }
