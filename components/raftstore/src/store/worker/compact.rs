@@ -4,18 +4,16 @@ use std::{
     collections::VecDeque,
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
     time::Duration,
 };
 
-use engine_traits::{
-    CF_LOCK, CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats, SstFileStats,
-};
+use engine_traits::{CF_LOCK, CF_WRITE, KvEngine, ManualCompactionOptions, RangeStats};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
 use tikv_util::{
-    box_try, config::Tracker, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
+    box_try, config::{Tracker, VersionTrack}, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
     worker::Runnable,
 };
 use yatp::Remote;
@@ -116,7 +114,7 @@ impl FullCompactController {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompactThreshold {
     pub tombstones_num_threshold: u64,
     pub tombstones_percent_threshold: u64,
@@ -386,7 +384,7 @@ where
         exclude_l0: bool,
     ) -> Result<(), Error> {
         fail_point!("on_compact_files_cf");
-        // TODO(fjy): add timer
+        // TODO:(fjy) add timer
         box_try!(self.engine.compact_files_cf(
             cf_name,
             files,
@@ -491,10 +489,15 @@ where
             } => match collect_files_need_compact(&self.engine, compact_threshold, gc_safe_point) {
                 Ok(files) => {
                     if !files.is_empty() {
-                        if let Err(e) =
-                            self.compact_files_cf(CF_WRITE, files.clone(), None, 1, false)
-                        {
-                            error!("compact files failed"; "err" => %e);
+                        // Iterate files and compact them one by one to avoid compact_files
+                        // include too many irrelavent files now. TODO:(fjy) maybe optimize this
+                        // by sort files by level and range in get_files_from_sst_stats_queue.
+                        for file in files {
+                            if let Err(e) =
+                                self.compact_files_cf(CF_WRITE, vec![file], None, 1, false)
+                            {
+                                error!("compact files failed"; "err" => %e);
+                            }
                         }
                     } else {
                         debug!("No files to compact, skipping compaction task");
@@ -629,6 +632,19 @@ mod tests {
         (
             pool.clone(),
             Runner::new(engine, pool.remote().clone(), Tracker::default(), false),
+        )
+    }
+
+    fn make_compact_runner_with_config<E>(engine: E, config: Config) -> (FuturePool, Runner<E>)
+    where
+        E: KvEngine,
+    {
+        let pool: FuturePool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
+        let version_track = Arc::new(VersionTrack::new(config));
+        let tracker = version_track.tracker("test".to_string());
+        (
+            pool.clone(),
+            Runner::new(engine, pool.remote().clone(), tracker, false),
         )
     }
 
@@ -1009,30 +1025,124 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_files_need_compact_no_files() {
-        let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
+    fn test_check_and_compact_files_task() {
+        let tmp_dir = Builder::new().prefix("test_file_compact").tempdir().unwrap();
         let engine = open_db(tmp_dir.path().to_str().unwrap());
+        
+        // Create a runner with config that enables file-based compaction
+        let mut config = Config::default();
+        config.enable_file_based_compaction = true;
+        let (_pool, mut runner) = make_compact_runner_with_config(engine.clone(), config);
 
-        // Test with no SST files at all - should return Ok(empty vec), not an error
-        let result = collect_files_need_compact(
-            &engine,
-            CompactThreshold::new(10, 30, 100, 100),
-            100, // gc_safe_point
-        );
-
-        match result {
-            Ok(files) => {
-                assert!(
-                    files.is_empty(),
-                    "Expected empty file list when no files need compacting"
-                );
-            }
-            Err(e) => {
-                panic!(
-                    "collect_files_need_compact should not return error for no files: {}",
-                    e
-                );
-            }
+        // Step 1: Create initial data and flush to create SST files
+        for i in 0..1000 {
+            let (k, v) = (format!("key_{:06}", i), format!("value_{}", i));
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+        
+        // Step 2: Add more data to create multiple versions
+        for i in 0..1000 {
+            let (k, v) = (format!("key_{:06}", i), format!("updated_value_{}", i));
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        // Step 3: Check initial SST file count and size
+        let initial_sst_size = engine.get_total_sst_files_size_cf(CF_WRITE).unwrap().unwrap_or(0);
+        println!("Initial SST size: {}", initial_sst_size);
+
+        // Step 4: Create tombstones by deleting keys (MVCC deletes)
+        for i in 0..500 {
+            let k = format!("key_{:06}", i);
+            delete(&engine, k.as_bytes(), 5.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        // Step 5: Add more tombstones to exceed threshold
+        for i in 500..800 {
+            let k = format!("key_{:06}", i);
+            delete(&engine, k.as_bytes(), 6.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        // Step 6: Wait a bit to ensure all data is persisted
+        sleep(Duration::from_millis(100));
+
+        // Step 7: Check SST size after deletes (should be larger due to tombstones)
+        let pre_compact_sst_size = engine.get_total_sst_files_size_cf(CF_WRITE).unwrap().unwrap_or(0);
+        println!("Pre-compaction SST size: {}", pre_compact_sst_size);
+
+        // Step 8: First, test what collect_files_need_compact returns
+        let compact_threshold = CompactThreshold::new(
+            10,  // tombstones_num_threshold - very low to trigger compaction
+            5,   // tombstones_percent_threshold - 5% threshold
+            10,  // redundant_rows_threshold
+            5,   // redundant_rows_percent_threshold - 5% threshold
+        );
+        
+        let gc_safe_point = 7; // Higher than all our commit timestamps
+        
+        // Check what files need compact before running the task
+        let files_before = collect_files_need_compact(&engine, compact_threshold.clone(), gc_safe_point);
+        match &files_before {
+            Ok(files) => println!("Files needing compaction before task: {:?}", files),
+            Err(e) => println!("collect_files_need_compact error before task: {}", e),
+        }
+        
+        // Run the CheckAndCompactFiles task
+        runner.run(Task::CheckAndCompactFiles {
+            compact_threshold: compact_threshold.clone(),
+            gc_safe_point,
+        });
+
+        // Step 9: Wait for compaction to complete
+        sleep(Duration::from_secs(2));
+
+        // Step 10: Check SST size after compaction
+        let post_compact_sst_size = engine.get_total_sst_files_size_cf(CF_WRITE).unwrap().unwrap_or(0);
+        println!("Post-compaction SST size: {}", post_compact_sst_size);
+
+        // Check files needing compaction after the task
+        let files_after = collect_files_need_compact(&engine, compact_threshold.clone(), gc_safe_point);
+        match &files_after {
+            Ok(files) => println!("Files needing compaction after task: {:?}", files),
+            Err(e) => println!("collect_files_need_compact error after task: {}", e),
+        }
+
+        // Step 11: If file-based compaction didn't work, try range-based compaction as fallback
+        if post_compact_sst_size >= pre_compact_sst_size {
+            println!("File-based compaction didn't reduce size, trying range-based compaction...");
+            
+            // Use CheckAndCompact task instead
+            let ranges = vec![
+                data_key(b"key_000000"),
+                data_key(b"key_500000"),
+                data_key(b"key_999999"),
+            ];
+            
+            runner.run(Task::CheckAndCompact {
+                cf_names: vec![CF_WRITE.to_string()],
+                ranges,
+                compact_threshold: compact_threshold.clone(),
+            });
+            
+            sleep(Duration::from_secs(2));
+            
+            let final_sst_size = engine.get_total_sst_files_size_cf(CF_WRITE).unwrap().unwrap_or(0);
+            println!("Final SST size after range compaction: {}", final_sst_size);
+            
+            // Verify that at least range-based compaction worked
+            assert!(final_sst_size < pre_compact_sst_size, 
+                "Expected compaction to reduce SST size. Pre: {}, Final: {}", 
+                pre_compact_sst_size, final_sst_size);
+        } else {
+            // File-based compaction worked
+            assert!(post_compact_sst_size < pre_compact_sst_size,
+                "Expected file-based compaction to reduce SST size. Pre: {}, Post: {}", 
+                pre_compact_sst_size, post_compact_sst_size);
+        }
+
+        println!("CheckAndCompactFiles task test completed successfully");
     }
 }

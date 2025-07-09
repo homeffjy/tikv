@@ -954,8 +954,11 @@ impl<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.fsm.store.id = store.get_id();
         self.fsm.store.start_time = Some(time::get_time());
         self.register_cleanup_import_sst_tick();
-        self.register_compact_check_tick();
-        self.register_compact_check_files_tick();
+        if self.ctx.cfg.enable_file_based_compaction {
+            self.register_compact_check_files_tick();
+        } else {
+            self.register_compact_check_tick();
+        }
         self.register_full_compact_tick();
         self.register_load_metrics_window_tick();
         self.register_pd_store_heartbeat_tick();

@@ -158,7 +158,7 @@ pub struct RocksEngine {
     // operation.
     pub ingest_latch: Arc<RangeLatch>,
     // SST stats queue for tracking SST file statistics
-    sst_stats_queue: Option<Arc<Mutex<SstStatsQueue>>>,
+    pub sst_stats_queue: Option<Arc<Mutex<SstStatsQueue>>>,
 }
 
 impl RocksEngine {
@@ -172,14 +172,6 @@ impl RocksEngine {
             ingest_latch: Arc::new(RangeLatch::new()),
             sst_stats_queue: None,
         }
-    }
-
-    pub fn set_sst_stats_queue(&mut self, sst_stats_queue: Arc<Mutex<SstStatsQueue>>) {
-        self.sst_stats_queue = Some(sst_stats_queue);
-    }
-
-    pub fn get_sst_stats_queue(&self) -> Option<Arc<Mutex<SstStatsQueue>>> {
-        self.sst_stats_queue.clone()
     }
 
     pub fn as_inner(&self) -> &Arc<DB> {

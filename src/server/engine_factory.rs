@@ -206,7 +206,7 @@ impl KvEngineFactory {
             engine_rocks::util::new_engine_opt(target_path.to_str().unwrap(), db_opts, cf_opts);
 
         if let (Ok(ref mut engine), Some(listener)) = (&mut kv_engine, sst_stats_listener) {
-            engine.set_sst_stats_queue(listener.stats_queue());
+            engine.sst_stats_queue = Some(listener.stats_queue());
         }
 
         if let Err(e) = &kv_engine {

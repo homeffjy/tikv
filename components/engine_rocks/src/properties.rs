@@ -620,7 +620,7 @@ pub fn get_files_from_sst_stats_queue(
     tombstones_percent_threshold: u64,
     redundant_rows_percent_threshold: u64,
 ) -> Option<Vec<String>> {
-    let stats_queue = match engine.get_sst_stats_queue() {
+    let stats_queue = match &engine.sst_stats_queue {
         Some(q) => q,
         None => return None,
     };

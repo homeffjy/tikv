@@ -143,6 +143,8 @@ pub struct Config {
     /// Minimum percentage of redundant rows to trigger manual compaction.
     /// Should between 1 and 100.
     pub region_compact_redundant_rows_percent: Option<u64>,
+    /// Enable file-based instead of range-based compact check.
+    pub enable_file_based_compaction: bool,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub pd_report_min_resolved_ts_interval: ReadableDuration,
@@ -487,6 +489,7 @@ impl Default for Config {
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
             region_compact_redundant_rows_percent: Some(20),
+            enable_file_based_compaction: false,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             pd_report_min_resolved_ts_interval: ReadableDuration::secs(1),
