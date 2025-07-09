@@ -668,14 +668,8 @@ fn need_compact_sst_internal(
     let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
     let redundant_keys = range_stats.redundant_keys();
 
-    // Check if tombstones percentage threshold is exceeded
-    if estimate_num_del * 100 >= tombstones_percent_threshold * range_stats.num_entries
-        && redundant_keys * 100 >= redundant_rows_percent_threshold * range_stats.num_entries
-    {
-        return true;
-    }
-
-    false
+    estimate_num_del * 100 >= tombstones_percent_threshold * range_stats.num_entries
+        || redundant_keys * 100 >= redundant_rows_percent_threshold * range_stats.num_entries
 }
 
 #[cfg(test)]

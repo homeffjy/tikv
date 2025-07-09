@@ -582,7 +582,7 @@ fn collect_files_need_compact(
     compact_threshold: CompactThreshold,
     gc_safe_point: u64,
 ) -> Result<Vec<String>, Error> {
-    // Get files that need compacting from the SST stats queue
+    // Get and pop files that need compacting from the SST stats queue
     let files = match box_try!(engine.get_files_from_sst_stats_queue(
         gc_safe_point,
         compact_threshold.tombstones_percent_threshold,
@@ -596,12 +596,6 @@ fn collect_files_need_compact(
     };
 
     assert!(!files.is_empty());
-
-    info!("Found files that need compacting";
-          "file_count" => files.len(),
-          "gc_safe_point" => ?gc_safe_point,
-          "files" => ?files);
-
     Ok(files)
 }
 
@@ -1114,16 +1108,7 @@ mod tests {
             let (k, v) = (format!("key_{:06}", i), format!("updated_value_{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
         }
-        engine.flush_cf(CF_WRITE, true).unwrap();
-
-        let sst_size_after_updated_data = engine
-            .get_total_sst_files_size_cf(CF_WRITE)
-            .unwrap()
-            .unwrap_or(0);
-        println!(
-            "SST size after updated data: {}",
-            sst_size_after_updated_data
-        );
+        // engine.flush_cf(CF_WRITE, true).unwrap();
 
         // Step 3: Update data to create multiple versions
         println!("Step 3: Updating data to create multiple versions...");
@@ -1132,15 +1117,6 @@ mod tests {
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 5.into(), 6.into());
         }
         engine.flush_cf(CF_WRITE, true).unwrap();
-
-        let sst_size_after_multiple_versions = engine
-            .get_total_sst_files_size_cf(CF_WRITE)
-            .unwrap()
-            .unwrap_or(0);
-        println!(
-            "SST size after multiple versions: {}",
-            sst_size_after_multiple_versions
-        );
 
         // Step 4: Check SST size before compaction
         let pre_compact_sst_size = engine
@@ -1155,6 +1131,24 @@ mod tests {
             println!("before compaction SST queue debug: {}", queue_guard.debug());
         }
 
+        let mut metadata = engine
+            .as_inner()
+            .get_column_family_meta_data(engine.as_inner().cf_handle(CF_WRITE).unwrap());
+
+        // 遍历各层级
+        for (level, level_meta) in metadata.get_levels().iter().enumerate() {
+            println!("Level {}: {} files", level, level_meta.get_files().len());
+
+            for file in level_meta.get_files() {
+                println!("  文件名: {}", file.get_name());
+                println!("  大小: {} bytes", file.get_size());
+                println!("  最小键: {:?}", file.get_smallestkey());
+                println!("  最大键: {:?}", file.get_largestkey());
+            }
+        }
+
+        println!("num_keys: {}", engine.get_num_keys().unwrap());
+
         let compact_threshold = CompactThreshold::new(
             10, // tombstones_num_threshold - very low to trigger compaction
             5,  // tombstones_percent_threshold - 5% threshold
@@ -1164,54 +1158,36 @@ mod tests {
 
         let gc_safe_point = 100; // Higher than all our commit timestamps
 
-        // Step 5: Checking files that need compaction
-        println!("Step 5: Checking files that need compaction...");
-        let files_before =
-            collect_files_need_compact(&engine, compact_threshold.clone(), gc_safe_point);
-        match &files_before {
-            Ok(files) => {
-                println!(
-                    "Files needing compaction before task: {} files",
-                    files.len()
-                );
-                for (i, file) in files.iter().enumerate() {
-                    println!("  File {}: {}", i + 1, file);
-                }
-            }
-            Err(e) => println!("collect_files_need_compact error before task: {}", e),
-        }
-
-        // Step 6: Running CheckAndCompactFiles task
-        println!("Step 6: Running CheckAndCompactFiles task...");
+        // Step 5: Running CheckAndCompactFiles task
+        println!("Step 5: Running CheckAndCompactFiles task...");
         runner.run(Task::CheckAndCompactFiles {
             compact_threshold: compact_threshold.clone(),
             gc_safe_point,
         });
 
-        // Step 7: Wait for compaction to complete
+        // Step 6: Wait for compaction to complete
         sleep(Duration::from_secs(3));
 
-        // Step 8: Check SST size after compaction
-        let post_compact_sst_size = engine
-            .get_total_sst_files_size_cf(CF_WRITE)
-            .unwrap()
-            .unwrap_or(0);
-        println!("Post-compaction SST size: {}", post_compact_sst_size);
+        // 获取 CF 的详细元数据，包含各层级文件信息
+        metadata = engine
+            .as_inner()
+            .get_column_family_meta_data(engine.as_inner().cf_handle(CF_WRITE).unwrap());
 
-        // Step 9: Check files that need compaction after the task
-        let files_after =
-            collect_files_need_compact(&engine, compact_threshold.clone(), gc_safe_point);
-        match &files_after {
-            Ok(files) => {
-                println!("Files needing compaction after task: {} files", files.len());
-                for (i, file) in files.iter().enumerate() {
-                    println!("  File {}: {}", i + 1, file);
-                }
+        // 遍历各层级
+        for (level, level_meta) in metadata.get_levels().iter().enumerate() {
+            println!("Level {}: {} files", level, level_meta.get_files().len());
+
+            for file in level_meta.get_files() {
+                println!("  文件名: {}", file.get_name());
+                println!("  大小: {} bytes", file.get_size());
+                println!("  最小键: {:?}", file.get_smallestkey());
+                println!("  最大键: {:?}", file.get_largestkey());
             }
-            Err(e) => println!("collect_files_need_compact error after task: {}", e),
         }
 
-        // Step 10: Check final SST stats queue state
+        println!("num_keys: {}", engine.get_num_keys().unwrap());
+
+        // Step 7: Check final SST stats queue state
         if let Some(ref queue) = engine.sst_stats_queue {
             let queue_guard = queue.lock().unwrap();
             println!("Final SST queue length: {}", queue_guard.len());
