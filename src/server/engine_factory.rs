@@ -34,6 +34,7 @@ struct FactoryInner {
     cf_resources: CfResources,
     state_storage: Option<Arc<dyn StateStorage>>,
     lite: bool,
+    enable_file_based_compaction: bool,
 }
 
 pub struct KvEngineFactoryBuilder {
@@ -60,6 +61,7 @@ impl KvEngineFactoryBuilder {
                 cf_resources: config.rocksdb.build_cf_resources(cache),
                 state_storage: None,
                 lite: false,
+                enable_file_based_compaction: config.raft_store.enable_file_based_compaction,
             },
             compact_event_sender: None,
         }
@@ -187,7 +189,7 @@ impl KvEngineFactory {
         let path = path.as_ref();
         let mut db_opts = self.db_opts(EngineType::RaftKv);
 
-        let sst_stats_listener = if !self.inner.lite {
+        let sst_stats_listener = if self.inner.enable_file_based_compaction {
             Some(SstStatsListener::new("kv"))
         } else {
             None
@@ -359,5 +361,28 @@ mod tests {
         );
         assert!(engine.get_value(&keys::data_key(b"k3")).unwrap().is_none());
         assert!(engine.get_value(&keys::data_key(b"k4")).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_enable_file_based_compaction() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let common_test_cfg = manifest_dir.join("components/test_raftstore/src/common-test.toml");
+        let cfg = TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                manifest_dir.display(),
+                e
+            );
+        });
+        assert!(cfg.raft_store.enable_file_based_compaction);
+
+        let cache = cfg.storage.block_cache.build_shared_cache();
+        let dir = test_util::temp_dir("test_file_based_compaction_enabled", false);
+        let env = cfg.build_shared_rocks_env(None, None).unwrap();
+        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None)
+            .lite(true)
+            .build();
+        let engine = factory.create_shared_db(dir.path()).unwrap();
+        assert!(engine.sst_stats_queue.is_some());
     }
 }

@@ -50,6 +50,7 @@ raft-log-reserve-max-ticks = 1000000
 raft-engine-purge-interval = "100ms"
 region-split-check-diff = 10000
 region-compact-check-interval = "12s"
+enable-file-based-compaction = true
 clean-stale-peer-delay = "0s"
 # Use a value of 3 seconds as max_leader_missing_duration just for test.
 # In production environment, the value of max_leader_missing_duration

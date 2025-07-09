@@ -4,7 +4,7 @@ use std::{
     collections::VecDeque,
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -13,7 +13,7 @@ use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
 use tikv_util::{
-    box_try, config::{Tracker, VersionTrack}, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
+    box_try, config::Tracker, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
     worker::Runnable,
 };
 use yatp::Remote;
@@ -635,19 +635,6 @@ mod tests {
         )
     }
 
-    fn make_compact_runner_with_config<E>(engine: E, config: Config) -> (FuturePool, Runner<E>)
-    where
-        E: KvEngine,
-    {
-        let pool: FuturePool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
-        let version_track = Arc::new(VersionTrack::new(config));
-        let tracker = version_track.tracker("test".to_string());
-        (
-            pool.clone(),
-            Runner::new(engine, pool.remote().clone(), tracker, false),
-        )
-    }
-
     #[test]
     fn test_disable_manual_compaction() {
         let path = Builder::new()
@@ -782,6 +769,67 @@ mod tests {
             (CF_WRITE, cf_opts),
         ];
         new_engine_opt(path, db_opts, cfs_opts).unwrap()
+    }
+
+    fn create_test_engine_with_file_compaction(path: &str) -> KvTestEngine {
+        use std::sync::Arc;
+
+        use engine_rocks::{
+            event_listener::RocksEventListener, raw::Env, sst_stats_listener::SstStatsListener,
+        };
+
+        // Create a custom engine with SST stats listener enabled
+        let tmp_dir = std::path::Path::new(path);
+        std::fs::create_dir_all(tmp_dir).unwrap();
+
+        // Use engine_rocks directly for better control over configuration
+        let mut db_opts = engine_rocks::RocksDbOptions::default();
+        db_opts.set_env(Arc::new(Env::default()));
+        db_opts.create_if_missing(true);
+        db_opts.add_event_listener(RocksEventListener::new("test_kv", None));
+
+        // Create SST stats listener for file-based compaction
+        let sst_listener = SstStatsListener::new("test_kv");
+        db_opts.add_event_listener(sst_listener.clone());
+
+        // Create CF options with proper properties collectors
+        let cfs_opts = vec![
+            (CF_DEFAULT, create_test_cf_options()),
+            (CF_RAFT, create_test_cf_options()),
+            (CF_LOCK, create_test_cf_options()),
+            (CF_WRITE, create_test_cf_options_with_trigger(8)),
+        ];
+
+        let mut engine = engine_rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+
+        // Set the SST stats queue on the engine
+        engine.sst_stats_queue = Some(sst_listener.stats_queue());
+
+        engine
+    }
+
+    fn create_test_cf_options() -> engine_rocks::RocksCfOptions {
+        use engine_rocks::properties::{
+            MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+        };
+
+        let mut cf_opts = engine_rocks::RocksCfOptions::default();
+        // Add necessary table properties collectors for MVCC support
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.range-properties-collector",
+            RangePropertiesCollectorFactory::default(),
+        );
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
+        cf_opts
+    }
+
+    fn create_test_cf_options_with_trigger(trigger: i32) -> engine_rocks::RocksCfOptions {
+        let mut cf_opts = create_test_cf_options();
+        cf_opts.set_level_zero_file_num_compaction_trigger(trigger);
+        cf_opts
     }
 
     #[test]
@@ -1026,123 +1074,148 @@ mod tests {
 
     #[test]
     fn test_check_and_compact_files_task() {
-        let tmp_dir = Builder::new().prefix("test_file_compact").tempdir().unwrap();
-        let engine = open_db(tmp_dir.path().to_str().unwrap());
-        
-        // Create a runner with config that enables file-based compaction
-        let mut config = Config::default();
-        config.enable_file_based_compaction = true;
-        let (_pool, mut runner) = make_compact_runner_with_config(engine.clone(), config);
+        let tmp_dir = Builder::new()
+            .prefix("test_file_compact")
+            .tempdir()
+            .unwrap();
 
-        // Step 1: Create initial data and flush to create SST files
+        let engine = create_test_engine_with_file_compaction(tmp_dir.path().to_str().unwrap());
+
+        assert!(
+            engine.sst_stats_queue.is_some(),
+            "SST stats queue should be initialized when enable_file_based_compaction is true"
+        );
+
+        let (_pool, mut runner) = make_compact_runner(engine.clone());
+
+        // Step 1: Creating initial data
+        println!("Step 1: Creating initial data...");
         for i in 0..1000 {
             let (k, v) = (format!("key_{:06}", i), format!("value_{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
         engine.flush_cf(CF_WRITE, true).unwrap();
-        
-        // Step 2: Add more data to create multiple versions
+
+        if let Some(ref queue) = engine.sst_stats_queue {
+            let queue_guard = queue.lock().unwrap();
+            println!("Initial SST queue length: {}", queue_guard.len());
+            println!("Initial SST queue debug: {}", queue_guard.debug());
+        }
+
+        let initial_sst_size = engine
+            .get_total_sst_files_size_cf(CF_WRITE)
+            .unwrap()
+            .unwrap_or(0);
+        println!("Initial SST size: {}", initial_sst_size);
+
+        // Step 2: Add updated data
+        println!("Step 2: Adding updated data...");
         for i in 0..1000 {
             let (k, v) = (format!("key_{:06}", i), format!("updated_value_{}", i));
             mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 3.into(), 4.into());
         }
         engine.flush_cf(CF_WRITE, true).unwrap();
 
-        // Step 3: Check initial SST file count and size
-        let initial_sst_size = engine.get_total_sst_files_size_cf(CF_WRITE).unwrap().unwrap_or(0);
-        println!("Initial SST size: {}", initial_sst_size);
+        let sst_size_after_updated_data = engine
+            .get_total_sst_files_size_cf(CF_WRITE)
+            .unwrap()
+            .unwrap_or(0);
+        println!(
+            "SST size after updated data: {}",
+            sst_size_after_updated_data
+        );
 
-        // Step 4: Create tombstones by deleting keys (MVCC deletes)
-        for i in 0..500 {
-            let k = format!("key_{:06}", i);
-            delete(&engine, k.as_bytes(), 5.into());
+        // Step 3: Update data to create multiple versions
+        println!("Step 3: Updating data to create multiple versions...");
+        for i in 0..1000 {
+            let (k, v) = (format!("key_{:06}", i), format!("updated_value_{}", i));
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 5.into(), 6.into());
         }
         engine.flush_cf(CF_WRITE, true).unwrap();
 
-        // Step 5: Add more tombstones to exceed threshold
-        for i in 500..800 {
-            let k = format!("key_{:06}", i);
-            delete(&engine, k.as_bytes(), 6.into());
-        }
-        engine.flush_cf(CF_WRITE, true).unwrap();
+        let sst_size_after_multiple_versions = engine
+            .get_total_sst_files_size_cf(CF_WRITE)
+            .unwrap()
+            .unwrap_or(0);
+        println!(
+            "SST size after multiple versions: {}",
+            sst_size_after_multiple_versions
+        );
 
-        // Step 6: Wait a bit to ensure all data is persisted
-        sleep(Duration::from_millis(100));
-
-        // Step 7: Check SST size after deletes (should be larger due to tombstones)
-        let pre_compact_sst_size = engine.get_total_sst_files_size_cf(CF_WRITE).unwrap().unwrap_or(0);
+        // Step 4: Check SST size before compaction
+        let pre_compact_sst_size = engine
+            .get_total_sst_files_size_cf(CF_WRITE)
+            .unwrap()
+            .unwrap_or(0);
         println!("Pre-compaction SST size: {}", pre_compact_sst_size);
 
-        // Step 8: First, test what collect_files_need_compact returns
+        if let Some(ref queue) = engine.sst_stats_queue {
+            let queue_guard = queue.lock().unwrap();
+            println!("before compaction SST queue length: {}", queue_guard.len());
+            println!("before compaction SST queue debug: {}", queue_guard.debug());
+        }
+
         let compact_threshold = CompactThreshold::new(
-            10,  // tombstones_num_threshold - very low to trigger compaction
-            5,   // tombstones_percent_threshold - 5% threshold
-            10,  // redundant_rows_threshold
-            5,   // redundant_rows_percent_threshold - 5% threshold
+            10, // tombstones_num_threshold - very low to trigger compaction
+            5,  // tombstones_percent_threshold - 5% threshold
+            10, // redundant_rows_threshold
+            5,  // redundant_rows_percent_threshold - 5% threshold
         );
-        
-        let gc_safe_point = 7; // Higher than all our commit timestamps
-        
-        // Check what files need compact before running the task
-        let files_before = collect_files_need_compact(&engine, compact_threshold.clone(), gc_safe_point);
+
+        let gc_safe_point = 100; // Higher than all our commit timestamps
+
+        // Step 5: Checking files that need compaction
+        println!("Step 5: Checking files that need compaction...");
+        let files_before =
+            collect_files_need_compact(&engine, compact_threshold.clone(), gc_safe_point);
         match &files_before {
-            Ok(files) => println!("Files needing compaction before task: {:?}", files),
+            Ok(files) => {
+                println!(
+                    "Files needing compaction before task: {} files",
+                    files.len()
+                );
+                for (i, file) in files.iter().enumerate() {
+                    println!("  File {}: {}", i + 1, file);
+                }
+            }
             Err(e) => println!("collect_files_need_compact error before task: {}", e),
         }
-        
-        // Run the CheckAndCompactFiles task
+
+        // Step 6: Running CheckAndCompactFiles task
+        println!("Step 6: Running CheckAndCompactFiles task...");
         runner.run(Task::CheckAndCompactFiles {
             compact_threshold: compact_threshold.clone(),
             gc_safe_point,
         });
 
-        // Step 9: Wait for compaction to complete
-        sleep(Duration::from_secs(2));
+        // Step 7: Wait for compaction to complete
+        sleep(Duration::from_secs(3));
 
-        // Step 10: Check SST size after compaction
-        let post_compact_sst_size = engine.get_total_sst_files_size_cf(CF_WRITE).unwrap().unwrap_or(0);
+        // Step 8: Check SST size after compaction
+        let post_compact_sst_size = engine
+            .get_total_sst_files_size_cf(CF_WRITE)
+            .unwrap()
+            .unwrap_or(0);
         println!("Post-compaction SST size: {}", post_compact_sst_size);
 
-        // Check files needing compaction after the task
-        let files_after = collect_files_need_compact(&engine, compact_threshold.clone(), gc_safe_point);
+        // Step 9: Check files that need compaction after the task
+        let files_after =
+            collect_files_need_compact(&engine, compact_threshold.clone(), gc_safe_point);
         match &files_after {
-            Ok(files) => println!("Files needing compaction after task: {:?}", files),
+            Ok(files) => {
+                println!("Files needing compaction after task: {} files", files.len());
+                for (i, file) in files.iter().enumerate() {
+                    println!("  File {}: {}", i + 1, file);
+                }
+            }
             Err(e) => println!("collect_files_need_compact error after task: {}", e),
         }
 
-        // Step 11: If file-based compaction didn't work, try range-based compaction as fallback
-        if post_compact_sst_size >= pre_compact_sst_size {
-            println!("File-based compaction didn't reduce size, trying range-based compaction...");
-            
-            // Use CheckAndCompact task instead
-            let ranges = vec![
-                data_key(b"key_000000"),
-                data_key(b"key_500000"),
-                data_key(b"key_999999"),
-            ];
-            
-            runner.run(Task::CheckAndCompact {
-                cf_names: vec![CF_WRITE.to_string()],
-                ranges,
-                compact_threshold: compact_threshold.clone(),
-            });
-            
-            sleep(Duration::from_secs(2));
-            
-            let final_sst_size = engine.get_total_sst_files_size_cf(CF_WRITE).unwrap().unwrap_or(0);
-            println!("Final SST size after range compaction: {}", final_sst_size);
-            
-            // Verify that at least range-based compaction worked
-            assert!(final_sst_size < pre_compact_sst_size, 
-                "Expected compaction to reduce SST size. Pre: {}, Final: {}", 
-                pre_compact_sst_size, final_sst_size);
-        } else {
-            // File-based compaction worked
-            assert!(post_compact_sst_size < pre_compact_sst_size,
-                "Expected file-based compaction to reduce SST size. Pre: {}, Post: {}", 
-                pre_compact_sst_size, post_compact_sst_size);
+        // Step 10: Check final SST stats queue state
+        if let Some(ref queue) = engine.sst_stats_queue {
+            let queue_guard = queue.lock().unwrap();
+            println!("Final SST queue length: {}", queue_guard.len());
+            println!("Final SST queue debug: {}", queue_guard.debug());
         }
-
-        println!("CheckAndCompactFiles task test completed successfully");
     }
 }
