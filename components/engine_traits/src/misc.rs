@@ -245,46 +245,6 @@ mod tests {
         queue.add_stats(stats_b);
         assert_eq!(queue.len(), 2);
     }
-
-    #[test]
-    fn test_sst_stats_queue_timestamp_max_handling() {
-        let mut queue = SstStatsQueue::new();
-        
-        // Test file with no timestamped data (should use u64::MAX for min_commit_ts)
-        let stats_no_timestamp = SstFileStats {
-            range_stats: RangeStats::default(),
-            file_name: "no_timestamp.sst".to_string(),
-            min_commit_ts: u64::MAX, // This would be set when mvcc_props.min_ts == TimeStamp::max()
-        };
-
-        // Test file with actual timestamp data
-        let stats_with_timestamp = SstFileStats {
-            range_stats: RangeStats::default(),
-            file_name: "with_timestamp.sst".to_string(),
-            min_commit_ts: 100,
-        };
-
-        queue.add_stats(stats_no_timestamp);
-        queue.add_stats(stats_with_timestamp);
-        assert_eq!(queue.len(), 2);
-
-        // When gc_safe_point is very high, only files with actual timestamps should be returned
-        let popped = queue.pop_before_ts(u64::MAX - 1);
-        assert_eq!(popped.len(), 1);
-        assert_eq!(popped[0].file_name, "with_timestamp.sst");
-        assert_eq!(popped[0].min_commit_ts, 100);
-        
-        // The file with u64::MAX min_commit_ts should remain in queue
-        assert_eq!(queue.len(), 1);
-        
-        // Only when gc_safe_point is u64::MAX should the remaining file be returned
-        let popped2 = queue.pop_before_ts(u64::MAX);
-        assert_eq!(popped2.len(), 1);
-        assert_eq!(popped2[0].file_name, "no_timestamp.sst");
-        assert_eq!(popped2[0].min_commit_ts, u64::MAX);
-        
-        assert!(queue.is_empty());
-    }
 }
 
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {

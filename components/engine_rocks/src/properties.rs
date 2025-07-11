@@ -18,7 +18,7 @@ use tikv_util::{
         Error, Result,
         number::{self, NumberEncoder},
     },
-    info, warn,
+    debug, info, warn,
 };
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
@@ -637,6 +637,7 @@ pub fn get_files_from_sst_stats_queue(
     };
 
     let candidates = queue.pop_before_ts(gc_safe_point);
+    debug!("candidates: {:?}", candidates);
 
     let mut files_to_compact = Vec::new();
     for stats in candidates.iter() {
@@ -648,6 +649,8 @@ pub fn get_files_from_sst_stats_queue(
             files_to_compact.push(stats.file_name.clone());
         }
     }
+
+    debug!("files_to_compact: {:?}", files_to_compact);
 
     match files_to_compact.len() {
         0 => None,

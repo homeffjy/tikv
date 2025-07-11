@@ -500,7 +500,7 @@ where
                             }
                         }
                     } else {
-                        debug!("No files to compact, skipping compaction task");
+                        info!("No files to compact, skipping compaction task");
                     }
                     fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
                 }
