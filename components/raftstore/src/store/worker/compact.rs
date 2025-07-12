@@ -488,19 +488,13 @@ where
                 gc_safe_point,
             } => match collect_files_need_compact(&self.engine, compact_threshold, gc_safe_point) {
                 Ok(files) => {
-                    if !files.is_empty() {
-                        // Iterate files and compact them one by one to avoid compact_files
-                        // include too many irrelavent files now. TODO:(fjy) maybe optimize this
-                        // by sort files by level and range in get_files_from_sst_stats_queue.
-                        for file in files {
-                            if let Err(e) =
-                                self.compact_files_cf(CF_WRITE, vec![file], None, 1, false)
-                            {
-                                error!("compact files failed"; "err" => %e);
-                            }
+                    // Iterate files and compact them one by one to avoid compact_files
+                    // includes too many irrelavent files.
+                    for file in files {
+                        if let Err(e) = self.compact_files_cf(CF_WRITE, vec![file], None, 1, false)
+                        {
+                            error!("compact files failed"; "err" => %e);
                         }
-                    } else {
-                        info!("No files to compact, skipping compaction task");
                     }
                     fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
                 }
@@ -590,11 +584,12 @@ fn collect_files_need_compact(
     )) {
         Some(files) => files,
         None => {
-            debug!("No files found for compaction from SST stats queue");
+            info!("No files found for compaction from SST stats queue");
             return Ok(Vec::new());
         }
     };
 
+    info!("files to compact: {:?}", files);
     assert!(!files.is_empty());
     Ok(files)
 }

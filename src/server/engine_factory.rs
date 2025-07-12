@@ -190,6 +190,7 @@ impl KvEngineFactory {
         let mut db_opts = self.db_opts(EngineType::RaftKv);
 
         let sst_stats_listener = if self.inner.enable_file_based_compaction {
+            info!("File-based compaction enabled");
             Some(SstStatsListener::new("kv"))
         } else {
             None

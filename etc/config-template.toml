@@ -486,6 +486,9 @@
 ## exceeds `region-compact-redundant-rows-percent`.
 # region-compact-redundant-rows-percent = 20
 
+## Enable file-based instead of range-based compact check mvcc gc.
+# enable-file-based-compaction = false
+
 ## Interval to check whether to start a manual compaction for Lock Column Family.
 ## If written bytes reach `lock-cf-compact-bytes-threshold` for Lock Column Family, TiKV will
 ## trigger a manual compaction for Lock Column Family.

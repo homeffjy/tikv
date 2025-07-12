@@ -5,7 +5,7 @@ use std::{
 
 use engine_traits::{RangeStats, SstFileStats, SstStatsQueue};
 use rocksdb::{CompactionJobInfo, EventListener, FlushJobInfo};
-use tikv_util::{info, warn};
+use tikv_util::{debug, warn};
 use txn_types::TimeStamp;
 
 use crate::mvcc_properties::RocksMvccProperties;
@@ -37,13 +37,7 @@ impl SstStatsListener {
 
         let mvcc_props = match RocksMvccProperties::decode(user_props) {
             Ok(props) => props,
-            Err(e) => {
-                warn!(
-                    "Failed to decode MVCC properties for SST file: {}, error: {:?}",
-                    file_path, e
-                );
-                return None;
-            }
+            Err(_) => return None,
         };
 
         Some(SstFileStats {
@@ -74,7 +68,7 @@ impl EventListener for SstStatsListener {
             info.file_path().to_string_lossy().to_string().as_str(),
             table_props,
         ) {
-            info!(
+            debug!(
                 "SST file created by flush";
                 "db" => &self.db_name,
                 "cf" => info.cf_name(),
@@ -117,7 +111,7 @@ impl EventListener for SstStatsListener {
         table_props_map.iter().for_each(|(file_path, table_props)| {
             if input_files.contains(file_path) {
                 if let Some(stats) = self.extract_sst_stats(file_path, table_props) {
-                    info!(
+                    debug!(
                         "SST file deleted by compaction";
                         "db" => &self.db_name,
                         "cf" => info.cf_name(),
@@ -137,7 +131,7 @@ impl EventListener for SstStatsListener {
             }
             assert!(output_files.contains(file_path));
             if let Some(stats) = self.extract_sst_stats(file_path, table_props) {
-                info!(
+                debug!(
                     "SST file created by compaction";
                     "db" => &self.db_name,
                     "cf" => info.cf_name(),
