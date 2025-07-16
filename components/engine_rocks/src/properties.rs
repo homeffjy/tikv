@@ -586,12 +586,17 @@ pub fn get_file_to_compact(
         Err(poisoned) => poisoned.into_inner(),
     };
 
+    if let Some((_, score)) = queue.peek_tombstone() {
+        if *score >= tombstones_percent_threshold {
+            if let Some((file_name, _)) = queue.pop_tombstone() {
+                debug!("file to tombstone gc compact: {:?}", file_name);
+                return Some(file_name);
+            }
+        }
+    }
+
     if let Some(candidate) = queue.pop_before_ts(gc_safe_point) {
-        if need_compact_sst_internal(
-            &candidate,
-            tombstones_percent_threshold,
-            redundant_rows_percent_threshold,
-        ) {
+        if need_compact_sst_internal(&candidate, redundant_rows_percent_threshold) {
             debug!("file to mvcc gc compact: {:?}", candidate.file_name);
             return Some(candidate.file_name);
         }
@@ -601,7 +606,6 @@ pub fn get_file_to_compact(
 
 fn need_compact_sst_internal(
     sst_stats: &SstFileStats,
-    tombstones_percent_threshold: u64,
     redundant_rows_percent_threshold: u64,
 ) -> bool {
     let range_stats = &sst_stats.range_stats;
@@ -609,11 +613,9 @@ fn need_compact_sst_internal(
         return false;
     }
 
-    let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
     let redundant_keys = range_stats.redundant_keys();
 
-    estimate_num_del * 100 >= tombstones_percent_threshold * range_stats.num_entries
-        || redundant_keys * 100 >= redundant_rows_percent_threshold * range_stats.num_entries
+    redundant_keys * 100 >= redundant_rows_percent_threshold * range_stats.num_entries
 }
 
 #[cfg(test)]

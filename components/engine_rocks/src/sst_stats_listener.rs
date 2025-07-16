@@ -12,14 +12,14 @@ use crate::{SstStatsQueue, mvcc_properties::RocksMvccProperties};
 
 #[derive(Clone)]
 pub struct SstStatsListener {
-    db_name: String,
+    _db_name: String,
     stats_queue: Arc<Mutex<SstStatsQueue>>,
 }
 
 impl SstStatsListener {
     pub fn new(db_name: &str) -> SstStatsListener {
         SstStatsListener {
-            db_name: db_name.to_owned(),
+            _db_name: db_name.to_owned(),
             stats_queue: Arc::new(Mutex::new(SstStatsQueue::new())),
         }
     }
@@ -68,15 +68,7 @@ impl EventListener for SstStatsListener {
             info.file_path().to_string_lossy().to_string().as_str(),
             table_props,
         ) {
-            debug!(
-                "SST file created by flush";
-                "db" => &self.db_name,
-                "cf" => info.cf_name(),
-                "file" => &stats.file_name,
-                "num_entries" => stats.range_stats.num_entries,
-                "num_versions" => stats.range_stats.num_versions,
-                "min_commit_ts" => ?stats.min_commit_ts,
-            );
+            debug!("SST file created by flush: {:?}", stats);
             match self.stats_queue.lock() {
                 Ok(mut queue) => {
                     queue.add(stats);
@@ -111,12 +103,7 @@ impl EventListener for SstStatsListener {
         table_props_map.iter().for_each(|(file_path, table_props)| {
             if input_files.contains(file_path) {
                 if let Some(stats) = self.extract_sst_stats(file_path, table_props) {
-                    debug!(
-                        "SST file deleted by compaction";
-                        "db" => &self.db_name,
-                        "cf" => info.cf_name(),
-                        "file" => &stats.file_name,
-                    );
+                    debug!("SST file deleted by compaction: {:?}", stats);
                     match self.stats_queue.lock() {
                         Ok(mut queue) => {
                             queue.remove(file_path);
@@ -131,12 +118,7 @@ impl EventListener for SstStatsListener {
             }
             assert!(output_files.contains(file_path));
             if let Some(stats) = self.extract_sst_stats(file_path, table_props) {
-                debug!(
-                    "SST file created by compaction";
-                    "db" => &self.db_name,
-                    "cf" => info.cf_name(),
-                    "file" => &stats.file_name,
-                );
+                debug!("SST file created by compaction: {:?}", stats);
                 match self.stats_queue.lock() {
                     Ok(mut queue) => {
                         queue.add(stats);

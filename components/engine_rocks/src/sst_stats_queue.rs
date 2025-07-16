@@ -1,6 +1,6 @@
 use std::cmp::Reverse;
 
-use engine_traits::{RangeStats, SstFileStats};
+use engine_traits::SstFileStats;
 use keyed_priority_queue::KeyedPriorityQueue;
 
 #[derive(Debug)]
@@ -12,8 +12,13 @@ pub struct SstStatsQueue {
 impl SstStatsQueue {
     pub fn debug(&self) -> String {
         let mut result = String::new();
+        result.push_str("***queue***:");
         for (file_name, stats) in self.queue.iter() {
-            result.push_str(&format!("{}: {:?}\n", file_name, stats.0.min_commit_ts));
+            result.push_str(&format!("{}: {:?}", file_name, stats.0.min_commit_ts));
+        }
+        result.push_str("**tombstones***:");
+        for (file_name, score) in self.tombstones_queue.iter() {
+            result.push_str(&format!("{}: {:?}\n", file_name, score));
         }
         result
     }
@@ -71,14 +76,19 @@ impl SstStatsQueue {
     }
 
     fn compute_tombstone_score(&self, stats: &SstFileStats) -> u64 {
-        let num_del = stats.range_stats.num_deletes;
+        if stats.range_stats.num_entries < stats.range_stats.num_versions {
+            return 0;
+        }
+        let num_del = stats.range_stats.num_entries - stats.range_stats.num_versions;
         let num_ent = stats.range_stats.num_entries.max(1);
-        (num_del as u128 * 100 / num_ent as u128) as u64
+        (num_del * 100 / num_ent) as u64
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use engine_traits::RangeStats;
+
     use super::*;
 
     #[test]
