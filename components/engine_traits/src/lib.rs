@@ -295,6 +295,8 @@ pub use crate::sst::*;
 mod write_batch;
 pub use crate::write_batch::*;
 mod mvcc_properties;
+mod sst_stats;
+pub use crate::sst_stats::*;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
 mod range_properties;
