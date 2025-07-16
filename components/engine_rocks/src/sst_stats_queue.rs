@@ -1,11 +1,12 @@
 use std::cmp::Reverse;
 
-use engine_traits::SstFileStats;
+use engine_traits::{RangeStats, SstFileStats};
 use keyed_priority_queue::KeyedPriorityQueue;
 
 #[derive(Debug)]
 pub struct SstStatsQueue {
     queue: KeyedPriorityQueue<String, Reverse<SstFileStats>>, // key: file_name
+    tombstones_queue: KeyedPriorityQueue<String, u64>,        // on tombstone score
 }
 
 impl SstStatsQueue {
@@ -20,6 +21,7 @@ impl SstStatsQueue {
     pub fn new() -> Self {
         Self {
             queue: KeyedPriorityQueue::new(),
+            tombstones_queue: KeyedPriorityQueue::new(),
         }
     }
 
@@ -32,10 +34,14 @@ impl SstStatsQueue {
     }
 
     pub fn add(&mut self, stats: SstFileStats) {
-        self.queue.push(stats.file_name.clone(), Reverse(stats));
+        let file_name = stats.file_name.clone();
+        let score = self.compute_tombstone_score(&stats);
+        self.queue.push(file_name.clone(), Reverse(stats));
+        self.tombstones_queue.push(file_name, score);
     }
 
     pub fn remove(&mut self, file_name: &str) -> Option<SstFileStats> {
+        self.tombstones_queue.remove(file_name);
         self.queue.remove(file_name).map(|stats| stats.0)
     }
 
@@ -50,6 +56,24 @@ impl SstStatsQueue {
             }
         }
         None
+    }
+
+    pub fn peek_tombstone(&self) -> Option<(&String, &u64)> {
+        self.tombstones_queue
+            .peek()
+            .map(|(key, score)| (key, score))
+    }
+
+    pub fn pop_tombstone(&mut self) -> Option<(String, u64)> {
+        let (key, score) = self.tombstones_queue.pop()?;
+        self.queue.remove(&key);
+        Some((key, score))
+    }
+
+    fn compute_tombstone_score(&self, stats: &SstFileStats) -> u64 {
+        let num_del = stats.range_stats.num_deletes;
+        let num_ent = stats.range_stats.num_entries.max(1);
+        (num_del as u128 * 100 / num_ent as u128) as u64
     }
 }
 
@@ -118,5 +142,50 @@ mod tests {
         let popped = queue.pop_before_ts(125);
         assert!(popped.is_none());
         assert_eq!(queue.len(), 1);
+    }
+
+    #[test]
+    fn test_tombstone_score() {
+        let mut queue = SstStatsQueue::new();
+        let stats = SstFileStats {
+            range_stats: RangeStats {
+                num_entries: 100,
+                num_versions: 100,
+                num_rows: 100,
+                num_deletes: 100,
+            },
+            file_name: "file1.sst".to_string(),
+            min_commit_ts: 100,
+        };
+
+        let stats2 = SstFileStats {
+            range_stats: RangeStats {
+                num_entries: 100,
+                num_versions: 100,
+                num_rows: 100,
+                num_deletes: 0,
+            },
+            file_name: "file2.sst".to_string(),
+            min_commit_ts: 101,
+        };
+
+        queue.add(stats);
+        queue.add(stats2);
+
+        let (key, score) = queue.peek_tombstone().unwrap();
+        assert_eq!(key, "file1.sst");
+        assert_eq!(*score, 100u64);
+        let (key, score) = queue.pop_tombstone().unwrap();
+        assert_eq!(key, "file1.sst");
+        assert_eq!(score, 100);
+
+        let (key, score) = queue.peek_tombstone().unwrap();
+        assert_eq!(key, "file2.sst");
+        assert_eq!(*score, 0);
+        let (key, score) = queue.pop_tombstone().unwrap();
+        assert_eq!(key, "file2.sst");
+        assert_eq!(score, 0);
+        assert_eq!(queue.peek_tombstone(), None);
+        assert_eq!(queue.len(), 0);
     }
 }
