@@ -2,7 +2,7 @@
 
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, RangeStats, Result, SstFileStats, SstWriter, SstWriterBuilder, WriteBatch,
+    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch,
     WriteBatchExt, WriteOptions,
 };
 use fail::fail_point;
@@ -457,15 +457,6 @@ impl MiscExt for RocksEngine {
         Ok(crate::properties::get_range_stats(self, cf, start, end))
     }
 
-    fn get_range_sst_stats(
-        &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<Option<Vec<SstFileStats>>> {
-        Ok(crate::properties::get_range_sst_stats(self, cf, start, end))
-    }
-
     fn is_stalled_or_stopped(&self) -> bool {
         const ROCKSDB_IS_WRITE_STALLED: &str = "rocksdb.is-write-stalled";
         const ROCKSDB_IS_WRITE_STOPPED: &str = "rocksdb.is-write-stopped";
@@ -502,13 +493,13 @@ impl MiscExt for RocksEngine {
         self
     }
 
-    fn get_files_from_sst_stats_queue(
+    fn get_file_to_compact(
         &self,
         gc_safe_point: u64,
         tombstones_percent_threshold: u64,
         redundant_rows_percent_threshold: u64,
-    ) -> Result<Option<Vec<String>>> {
-        Ok(crate::properties::get_files_from_sst_stats_queue(
+    ) -> Result<Option<String>> {
+        Ok(crate::properties::get_file_to_compact(
             self,
             gc_safe_point,
             tombstones_percent_threshold,

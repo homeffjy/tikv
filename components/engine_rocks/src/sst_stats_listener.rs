@@ -79,11 +79,11 @@ impl EventListener for SstStatsListener {
             );
             match self.stats_queue.lock() {
                 Ok(mut queue) => {
-                    queue.add_stats(stats);
+                    queue.add(stats);
                 }
                 Err(poisoned) => {
                     warn!("SST stats queue mutex is poisoned during flush, attempting to recover");
-                    poisoned.into_inner().add_stats(stats);
+                    poisoned.into_inner().add(stats);
                 }
             }
         }
@@ -119,11 +119,11 @@ impl EventListener for SstStatsListener {
                     );
                     match self.stats_queue.lock() {
                         Ok(mut queue) => {
-                            queue.remove_stats(file_path);
+                            queue.remove(file_path);
                         }
                         Err(poisoned) => {
                             warn!("SST stats queue mutex is poisoned during compaction remove, attempting to recover");
-                            poisoned.into_inner().remove_stats(file_path);
+                            poisoned.into_inner().remove(file_path);
                         }
                     }
                 }
@@ -139,11 +139,11 @@ impl EventListener for SstStatsListener {
                 );
                 match self.stats_queue.lock() {
                     Ok(mut queue) => {
-                        queue.add_stats(stats);
+                        queue.add(stats);
                     }
                     Err(poisoned) => {
                         warn!("SST stats queue mutex is poisoned during compaction add, attempting to recover");
-                        poisoned.into_inner().add_stats(stats);
+                        poisoned.into_inner().add(stats);
                     }
                 }
             }

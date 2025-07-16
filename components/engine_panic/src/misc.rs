@@ -120,25 +120,16 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn get_range_sst_stats(
-        &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<Option<Vec<SstFileStats>>> {
-        panic!()
-    }
-
     fn is_stalled_or_stopped(&self) -> bool {
         panic!()
     }
 
-    fn get_files_from_sst_stats_queue(
+    fn get_file_to_compact(
         &self,
         gc_safe_point: u64,
         tombstones_percent_threshold: u64,
         redundant_rows_percent_threshold: u64,
-    ) -> Result<Option<Vec<String>>> {
+    ) -> Result<Option<String>> {
         panic!()
     }
 

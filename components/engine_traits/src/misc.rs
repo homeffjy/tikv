@@ -156,28 +156,25 @@ impl SstStatsQueue {
         self.queue.is_empty()
     }
 
-    pub fn add_stats(&mut self, stats: SstFileStats) {
+    pub fn add(&mut self, stats: SstFileStats) {
         self.queue.push(stats.file_name.clone(), Reverse(stats));
     }
 
-    pub fn remove_stats(&mut self, file_name: &str) -> Option<SstFileStats> {
+    pub fn remove(&mut self, file_name: &str) -> Option<SstFileStats> {
         self.queue.remove(file_name).map(|stats| stats.0)
     }
 
-    pub fn pop_before_ts(&mut self, max_ts: u64) -> Vec<SstFileStats> {
-        let mut result = Vec::new();
-
-        while let Some((_, stats)) = self.queue.peek() {
+    pub fn pop_before_ts(&mut self, max_ts: u64) -> Option<SstFileStats> {
+        if let Some((_, stats)) = self.queue.peek() {
             if stats.0.min_commit_ts <= max_ts {
                 if let Some((_, stats)) = self.queue.pop() {
-                    result.push(stats.0);
+                    return Some(stats.0);
                 }
             } else {
-                break;
+                return None;
             }
         }
-
-        result
+        None
     }
 }
 
@@ -209,41 +206,43 @@ mod tests {
             min_commit_ts: 50,
         };
 
-        queue.add_stats(stats1);
-        queue.add_stats(stats2);
-        queue.add_stats(stats3);
+        queue.add(stats1);
+        queue.add(stats2);
+        queue.add(stats3);
         assert_eq!(queue.len(), 3);
 
+        // [2, 3, 1] -> [3, 1]
         let popped = queue.pop_before_ts(75);
-        assert_eq!(popped.len(), 2);
-        // Should get both files with min_commit_ts = 50
-        assert!(popped.iter().any(|s| s.file_name == "file2.sst" && s.min_commit_ts == 50));
-        assert!(popped.iter().any(|s| s.file_name == "file3.sst" && s.min_commit_ts == 50));
-        assert_eq!(queue.len(), 1);
+        assert!(popped.is_some());
+        assert_eq!(popped.unwrap().file_name, "file2.sst");
+        assert_eq!(queue.len(), 2);
 
-        let removed = queue.remove_stats("file1.sst");
+        // [3, 1] -> [3]
+        let removed = queue.remove("file1.sst");
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().min_commit_ts, 100);
-        assert!(queue.is_empty());
+        assert_eq!(queue.len(), 1);
 
-        // Test ordering with same min_commit_ts
-        let stats_a = SstFileStats {
+        let stats4 = SstFileStats {
             range_stats: RangeStats::default(),
-            file_name: "a.sst".to_string(),
-            min_commit_ts: 100,
-        };
-        let stats_b = SstFileStats {
-            range_stats: RangeStats::default(),
-            file_name: "b.sst".to_string(),
-            min_commit_ts: 100,
+            file_name: "file4.sst".to_string(),
+            min_commit_ts: 150,
         };
 
-        // Files with same min_commit_ts should not be considered equal
-        assert_ne!(stats_a, stats_b);
-        
-        queue.add_stats(stats_a);
-        queue.add_stats(stats_b);
+        // [3] -> [3, 4]
+        queue.add(stats4);
         assert_eq!(queue.len(), 2);
+
+        // [3, 4] -> [4]
+        let popped = queue.pop_before_ts(125);
+        assert!(popped.is_some());
+        assert_eq!(queue.len(), 1);
+        assert_eq!(popped.unwrap().file_name, "file3.sst");
+
+        // [4] -> [4]
+        let popped = queue.pop_before_ts(125);
+        assert!(popped.is_none());
+        assert_eq!(queue.len(), 1);
     }
 }
 
@@ -333,24 +332,17 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
 
     fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>>;
 
-    fn get_range_sst_stats(
-        &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<Option<Vec<SstFileStats>>>;
-
     fn is_stalled_or_stopped(&self) -> bool;
 
-    /// Get files from SST stats queue that need compaction.
-    /// Returns file names of SST files where the minimum commit timestamp is less than
-    /// gc_safe_point and that meet the compaction criteria.
-    fn get_files_from_sst_stats_queue(
+    /// Get file to compact from SST stats queue.
+    /// Returns file name of SST file where the minimum commit timestamp is
+    /// less than gc_safe_point and that meet the compaction criteria.
+    fn get_file_to_compact(
         &self,
         gc_safe_point: u64,
         tombstones_percent_threshold: u64,
         redundant_rows_percent_threshold: u64,
-    ) -> Result<Option<Vec<String>>>;
+    ) -> Result<Option<String>>;
 
     /// Returns size and creation time of active memtable if there's one.
     fn get_active_memtable_stats_cf(

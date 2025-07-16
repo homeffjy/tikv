@@ -486,20 +486,20 @@ where
             Task::CheckAndCompactFiles {
                 compact_threshold,
                 gc_safe_point,
-            } => match collect_files_need_compact(&self.engine, compact_threshold, gc_safe_point) {
-                Ok(files) => {
-                    // Iterate files and compact them one by one to avoid compact_files
-                    // includes too many irrelavent files.
-                    for file in files {
-                        if let Err(e) = self.compact_files_cf(CF_WRITE, vec![file], None, 1, false)
-                        {
-                            error!("compact files failed"; "err" => %e);
-                        }
+            } => {
+                // Each `compact_files_cf` compacts the range involved by input sst files, which
+                // may change the sst stats queue.
+                while let Some(file) = collect_file_need_compact(
+                    &self.engine,
+                    compact_threshold.clone(),
+                    gc_safe_point,
+                ) {
+                    if let Err(e) = self.compact_files_cf(CF_WRITE, vec![file], None, 1, false) {
+                        error!("compact files failed"; "err" => %e);
                     }
-                    fail_point!("raftstore::compact::CheckAndCompact:AfterCompact");
+                    fail_point!("raftstore::compact::CheckAndCompactFiles:AfterCompact");
                 }
-                Err(e) => warn!("check files need compact failed"; "err" => %e),
-            },
+            }
         }
     }
 }
@@ -571,27 +571,23 @@ fn collect_ranges_need_compact(
     Ok(ranges_need_compact)
 }
 
-fn collect_files_need_compact(
+fn collect_file_need_compact(
     engine: &impl KvEngine,
     compact_threshold: CompactThreshold,
     gc_safe_point: u64,
-) -> Result<Vec<String>, Error> {
+) -> Option<String> {
     // Get and pop files that need compacting from the SST stats queue
-    let files = match box_try!(engine.get_files_from_sst_stats_queue(
+    match engine.get_file_to_compact(
         gc_safe_point,
         compact_threshold.tombstones_percent_threshold,
         compact_threshold.redundant_rows_percent_threshold,
-    )) {
-        Some(files) => files,
-        None => {
-            info!("No files found for compaction from SST stats queue");
-            return Ok(Vec::new());
+    ) {
+        Ok(file) => file,
+        Err(e) => {
+            error!("get file to compact failed"; "err" => %e);
+            None
         }
-    };
-
-    info!("files to compact: {:?}", files);
-    assert!(!files.is_empty());
-    Ok(files)
+    }
 }
 
 #[cfg(test)]

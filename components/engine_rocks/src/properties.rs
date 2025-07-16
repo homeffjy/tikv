@@ -18,9 +18,9 @@ use tikv_util::{
         Error, Result,
         number::{self, NumberEncoder},
     },
-    debug, info, warn,
+    debug, info,
 };
-use txn_types::{Key, TimeStamp, Write, WriteType};
+use txn_types::{Key, Write, WriteType};
 
 use crate::{
     decode_properties::{DecodeProperties, IndexHandle, IndexHandles},
@@ -570,56 +570,12 @@ pub fn get_range_stats(
     })
 }
 
-pub fn get_range_sst_stats(
-    engine: &crate::RocksEngine,
-    cf: &str,
-    start: &[u8],
-    end: &[u8],
-) -> Option<Vec<SstFileStats>> {
-    let range = Range::new(start, end);
-    let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
-        Ok(v) => v,
-        Err(_) => return None,
-    };
-
-    if collection.is_empty() {
-        return None;
-    }
-
-    let mut result_stats = Vec::with_capacity(collection.len());
-    for (name, v) in collection.iter() {
-        let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
-            Ok(props) => props,
-            Err(_) => return None,
-        };
-        let stats = SstFileStats {
-            range_stats: RangeStats {
-                num_entries: v.num_entries(),
-                num_versions: mvcc.num_versions,
-                num_rows: mvcc.num_rows,
-                num_deletes: mvcc.num_deletes,
-            },
-            file_name: name.to_string(),
-            min_commit_ts: if mvcc.min_ts == TimeStamp::max() {
-                // TimeStamp::max() means no timestamped data found in this SST file.
-                // Use u64::MAX to indicate this file should never be considered for GC
-                // since there's no MVCC data to garbage collect.
-                u64::MAX
-            } else {
-                mvcc.min_ts.into_inner()
-            },
-        };
-        result_stats.push(stats);
-    }
-    Some(result_stats)
-}
-
-pub fn get_files_from_sst_stats_queue(
+pub fn get_file_to_compact(
     engine: &crate::RocksEngine,
     gc_safe_point: u64,
     tombstones_percent_threshold: u64,
     redundant_rows_percent_threshold: u64,
-) -> Option<Vec<String>> {
+) -> Option<String> {
     let stats_queue = match &engine.sst_stats_queue {
         Some(q) => q,
         None => return None,
@@ -627,35 +583,20 @@ pub fn get_files_from_sst_stats_queue(
 
     let mut queue = match stats_queue.lock() {
         Ok(q) => q,
-        Err(poisoned) => {
-            // If the mutex is poisoned, we can still try to access the data
-            // but we log a warning as this indicates a panic occurred while holding the
-            // lock
-            warn!("SST stats queue mutex is poisoned, attempting to recover");
-            poisoned.into_inner()
-        }
+        Err(poisoned) => poisoned.into_inner(),
     };
 
-    let candidates = queue.pop_before_ts(gc_safe_point);
-    debug!("candidates: {:?}", candidates);
-
-    let mut files_to_compact = Vec::new();
-    for stats in candidates.iter() {
+    if let Some(candidate) = queue.pop_before_ts(gc_safe_point) {
         if need_compact_sst_internal(
-            stats,
+            &candidate,
             tombstones_percent_threshold,
             redundant_rows_percent_threshold,
         ) {
-            files_to_compact.push(stats.file_name.clone());
+            debug!("file to mvcc gc compact: {:?}", candidate.file_name);
+            return Some(candidate.file_name);
         }
     }
-
-    debug!("files_to_compact: {:?}", files_to_compact);
-
-    match files_to_compact.len() {
-        0 => None,
-        _ => Some(files_to_compact),
-    }
+    None
 }
 
 fn need_compact_sst_internal(
