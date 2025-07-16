@@ -3,12 +3,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use engine_traits::{RangeStats, SstFileStats, SstStatsQueue};
+use engine_traits::{RangeStats, SstFileStats};
 use rocksdb::{CompactionJobInfo, EventListener, FlushJobInfo};
 use tikv_util::{debug, warn};
 use txn_types::TimeStamp;
 
-use crate::mvcc_properties::RocksMvccProperties;
+use crate::{SstStatsQueue, mvcc_properties::RocksMvccProperties};
 
 #[derive(Clone)]
 pub struct SstStatsListener {

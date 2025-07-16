@@ -4,6 +4,8 @@
 //! not been carefully factored into other traits.
 //!
 //! FIXME: Things here need to be moved elsewhere.
+use std::cmp::Ordering;
+
 use crate::{
     KvEngine, WriteBatchExt, WriteOptions, cf_names::CfNamesExt, errors::Result,
     flow_control_factors::FlowControlFactorsExt, range::Range,
@@ -80,6 +82,47 @@ impl RangeStats {
         self.num_entries
             .saturating_sub(self.num_rows)
             .saturating_add(self.num_deletes)
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct SstFileStats {
+    pub range_stats: RangeStats,
+    pub file_name: String,
+    pub min_commit_ts: u64,
+}
+
+impl PartialEq for SstFileStats {
+    fn eq(&self, other: &Self) -> bool {
+        self.min_commit_ts == other.min_commit_ts && self.file_name == other.file_name
+    }
+}
+
+impl Eq for SstFileStats {}
+
+impl PartialOrd for SstFileStats {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // First compare by min_commit_ts
+        match self.min_commit_ts.partial_cmp(&other.min_commit_ts) {
+            Some(Ordering::Equal) => {
+                // If min_commit_ts is equal, compare by file_name for deterministic ordering
+                self.file_name.partial_cmp(&other.file_name)
+            }
+            other => other,
+        }
+    }
+}
+
+impl Ord for SstFileStats {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // First compare by min_commit_ts
+        match self.min_commit_ts.cmp(&other.min_commit_ts) {
+            Ordering::Equal => {
+                // If min_commit_ts is equal, compare by file_name for deterministic ordering
+                self.file_name.cmp(&other.file_name)
+            }
+            other => other,
+        }
     }
 }
 

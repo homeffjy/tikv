@@ -5,15 +5,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use engine_traits::{
-    IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SstStatsQueue, SyncMutable,
-};
+use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
 use rocksdb::{DB, DBIterator, Writable};
 use tikv_util::range_latch::RangeLatch;
 
 use crate::{
-    RocksEngineIterator, RocksSnapshot, db_vector::RocksDbVector, options::RocksReadOptions, r2e,
-    util::get_cf_handle,
+    RocksEngineIterator, RocksSnapshot, SstStatsQueue, db_vector::RocksDbVector,
+    options::RocksReadOptions, r2e, util::get_cf_handle,
 };
 
 #[cfg(feature = "trace-lifetime")]

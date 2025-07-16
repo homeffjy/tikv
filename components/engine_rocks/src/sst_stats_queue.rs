@@ -1,49 +1,7 @@
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Reverse;
 
+use engine_traits::SstFileStats;
 use keyed_priority_queue::KeyedPriorityQueue;
-
-use crate::RangeStats;
-
-#[derive(Default, Debug)]
-pub struct SstFileStats {
-    pub range_stats: RangeStats,
-    pub file_name: String,
-    pub min_commit_ts: u64,
-}
-
-impl PartialEq for SstFileStats {
-    fn eq(&self, other: &Self) -> bool {
-        self.min_commit_ts == other.min_commit_ts && self.file_name == other.file_name
-    }
-}
-
-impl Eq for SstFileStats {}
-
-impl PartialOrd for SstFileStats {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // First compare by min_commit_ts
-        match self.min_commit_ts.partial_cmp(&other.min_commit_ts) {
-            Some(Ordering::Equal) => {
-                // If min_commit_ts is equal, compare by file_name for deterministic ordering
-                self.file_name.partial_cmp(&other.file_name)
-            }
-            other => other,
-        }
-    }
-}
-
-impl Ord for SstFileStats {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // First compare by min_commit_ts
-        match self.min_commit_ts.cmp(&other.min_commit_ts) {
-            Ordering::Equal => {
-                // If min_commit_ts is equal, compare by file_name for deterministic ordering
-                self.file_name.cmp(&other.file_name)
-            }
-            other => other,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct SstStatsQueue {

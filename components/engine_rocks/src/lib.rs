@@ -50,6 +50,8 @@ mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
+mod sst_stats_queue;
+pub use crate::sst_stats_queue::*;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
 mod status;
